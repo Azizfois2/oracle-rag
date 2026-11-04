@@ -1,0 +1,62 @@
+[
+  {
+    "question": "Which company raised an $85M Series B to build a hybrid search database?",
+    "expect": "VectorForge",
+    "why": "single entity, exact name: keyword should be strong here"
+  },
+  {
+    "question": "Who is challenging Pinecone and Weaviate on retrieval latency?",
+    "expect": "VectorForge",
+    "why": "competitors named, answer implied: vector should help"
+  },
+  {
+    "question": "What did AWS release for multi-agent orchestration on Bedrock?",
+    "expect": "Bedrock Agents 2.0",
+    "why": "product name with a version number"
+  },
+  {
+    "question": "Which platform shipped Cortex AI Agents for enterprise data workflows?",
+    "expect": "Cortex AI Agents",
+    "why": "product name that appears verbatim"
+  },
+  {
+    "question": "How many monthly downloads did LangGraph reach?",
+    "expect": "1 million monthly downloads",
+    "why": "numeric fact"
+  },
+  {
+    "question": "Which small language model did Microsoft ship with the AI Foundry rebrand?",
+    "expect": "Phi-4",
+    "why": "short model name, easy to confuse"
+  },
+  {
+    "question": "What share of large organizations run at least one AI app in production?",
+    "expect": "72%",
+    "why": "statistic in a survey document"
+  },
+  {
+    "question": "Which open-weight models did Meta and Mistral release within 48 hours?",
+    "expect": "Llama 4",
+    "why": "two entities, one expected answer"
+  },
+  {
+    "question": "Which NVIDIA GPU did the cloud partnerships centre on?",
+    "expect": "H200",
+    "why": "short alphanumeric token"
+  },
+  {
+    "question": "What does Oracle offer through OCI for petaflop-scale AI workloads?",
+    "expect": "DGX SuperPOD",
+    "why": "Oracle-specific phrasing, appears in one document"
+  },
+  {
+    "question": "Why does hybrid retrieval matter for enterprise RAG according to the survey?",
+    "expect": "hybrid retrieval",
+    "why": "conceptual question with no single product name"
+  },
+  {
+    "question": "What does Snowflake use to combine vector and BM25 scoring?",
+    "expect": "Cortex Search",
+    "why": "feature name, semantic phrasing"
+  }
+]
