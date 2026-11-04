@@ -1,0 +1,5 @@
+# UI layer only. The rest of the stack (langchain, oracledb, torch, sentence
+# transformers) is the environment the notebook already uses:
+#   rag-oneclick/requirements.txt
+streamlit==1.66.1
+pypdf==6.21.4

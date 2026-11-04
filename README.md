@@ -2,7 +2,7 @@
 
 A local web app for the Oracle 26ai hybrid-search corpus: **ask questions, compare
 vector vs keyword vs hybrid retrieval, manage the corpus, measure quality, check
-the plumbing** — without touching a notebook cell.
+the plumbing** - without touching a notebook cell.
 
 Vision, principles and roadmap: [`VISION.md`](VISION.md).
 
@@ -31,7 +31,7 @@ Then open <http://localhost:8501>.
 
 - Oracle 26ai Free container `oracle-26ai-free` running and healthy (port 1521)
 - The `rag` Python environment at `%USERPROFILE%\rag-venv` (Python 3.11)
-- A Gemini API key in `.env` — **optional**; without it the app runs in local mode
+- A Gemini API key in `.env` - **optional**; without it the app runs in local mode
 
 `.env` is looked up, in order:
 
@@ -54,10 +54,10 @@ GEMINI_MODEL=          # optional pin; otherwise models are tried in order
 
 ## The five surfaces
 
-| Tab | What it is for |
+| Surface | What it is for |
 |---|---|
 | **Ask** | ReAct agent over the corpus, with a trace: tool calls, queries, sources, API calls, latency. Local mode = no LLM, zero quota. |
-| **Search lab** | The same query through keyword, vector and hybrid at once — scores, snippets, overlap. The proof that hybrid earns its keep. |
+| **Search lab** | The same query through keyword, vector and hybrid at once - scores, snippets, overlap. The proof that hybrid earns its keep. |
 | **Corpus** | Source list, chunk counts, ingest text/files, delete a source, rebuild indexes. |
 | **Quality** | Labelled question set → hit@k and MRR per retrieval path, saved per run. |
 | **Health** | Database version, container state, indexes, embedding model, key presence, per-model quota with reset time. |
@@ -68,14 +68,15 @@ GEMINI_MODEL=          # optional pin; otherwise models are tried in order
 
 ```
 oracle-rag/
-├─ app.py                 Streamlit UI — no SQL, no prompts
+├─ app.py                 Streamlit UI - no SQL, no prompts
 ├─ rag_core.py            the only contract: Oracle, retrieval, agent, quota
 ├─ START-GUI.bat          launcher (checks venv, deps, port)
 ├─ notebook/              the original lab notebook (canonical copy)
 ├─ quality/questions.json labelled questions + expected source
 ├─ quality/run_eval.py    hit@k / MRR harness (CLI + used by the Quality tab)
 ├─ tests/smoke_test.py    engine tests, spend zero API quota
-├─ tests/test_app.py      headless render test via streamlit.testing
+├─ tests/test_app.py      headless render + live search via streamlit.testing
+├─ tests/test_db_down.py  the offline screen starts without a traceback
 ├─ data/                  quota.json, model.json, eval-last.json (gitignored)
 └─ logs/                  launcher logs (gitignored)
 ```
@@ -89,13 +90,15 @@ needs data, `rag_core.py` grows a function.
 
 ```bat
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\smoke_test.py
-%USERPROFILE%\rag-venv\Scripts\python.exe tests\smoke_test.py --llm   REM spends 1-5 API calls
-%USERPROFILE%\rag-venv\Scripts\python.exe -m pytest tests -q
+%USERPROFILE%\rag-venv\Scripts\python.exe tests\smoke_test.py --llm   REM spends 2-6 API calls
+%USERPROFILE%\rag-venv\Scripts\python.exe tests\test_app.py
+%USERPROFILE%\rag-venv\Scripts\python.exe tests\test_db_down.py
 ```
 
 `smoke_test.py` covers: settings discovery, connect, stats, the three retrieval
 paths, score ranges, ingest → search → delete round-trip, chunking, quota
 bookkeeping. It writes only to a scratch source name and removes it afterwards.
+`--llm` adds one real agent question and is the only test that spends quota.
 
 ---
 
@@ -105,10 +108,24 @@ bookkeeping. It writes only to a scratch source name and removes it afterwards.
 |---|---|---|
 | Keyword | Oracle Text `CONTAINS(text, :q, 1)`, ranked by `SCORE(1)` | normalised 0–1 vs best hit |
 | Vector | HNSW index, `1 − VECTOR_DISTANCE(embedding, :q, COSINE)` | cosine similarity 0–1 |
-| Hybrid | candidate pool from both paths, fused: `w·vector + (1−w)·keyword` | fused 0–1 |
+| Hybrid | candidate pool from both paths, each component min-max normalised over the pool, then `w·v̂ + (1−w)·k̂` | fused 0–1 |
 
 `w` is the slider in the Search lab (0 = keyword only, 1 = vector only).
-Scores are computed in `rag_core.py` exactly as shown — copy the SQL and re-run it.
+At either extreme the ranking is exactly the pure path, not an approximation.
+Scores are computed in `rag_core.py` exactly as shown - copy the SQL and re-run it.
+
+**Measured on the 12 labelled questions, k = 5** (Quality tab, weight 0.6):
+
+| Path | hit@5 | MRR | notes |
+|---|---|---|---|
+| Keyword | 0.92 | 0.83 | misses the Oracle OCI question entirely |
+| Vector | 1.00 | 0.96 | finds everything, ranks first 11/12 |
+| Hybrid | 1.00 | 0.96 | recovers the keyword miss, matches vector on rank |
+
+Hybrid does not beat vector on this ten-document sample. That is the honest
+result, and the Search lab shows why: at this size the vector pool already holds
+the answer, so fusion has nothing extra to add. The keyword path is what the
+fusion rescues, and the numbers say so.
 
 ---
 
@@ -128,7 +145,7 @@ Scores are computed in `rag_core.py` exactly as shown — copy the SQL and re-ru
 
 The Oracle container has **no mounted volume**. `docker stop/start/restart` is
 safe; `docker rm` or deleting the container in Docker Desktop destroys the
-database. The app never drops tables on its own — deleting a source removes only
+database. The app never drops tables on its own - deleting a source removes only
 that source's rows, behind a confirmation.
 
 ---
