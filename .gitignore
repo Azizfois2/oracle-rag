@@ -1,0 +1,23 @@
+# secrets and local config
+.env
+.streamlit/secrets.toml
+
+# runtime state (quota counters, last eval run) — local, disposable
+data/
+logs/
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# jupyter
+.ipynb_checkpoints/
+*.executed.ipynb
+
+# editors / os
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
