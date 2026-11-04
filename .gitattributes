@@ -1,0 +1,14 @@
+# Normalise line endings in the repository. Git stores text as LF and checks
+# out the platform default, except for Windows launchers, which must be CRLF
+# everywhere or cmd.exe can misread them.
+* text=auto
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Images and archives are not text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.zip binary

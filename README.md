@@ -40,7 +40,13 @@ Then open <http://localhost:8501>.
 3. `rag-oneclick\.env`
 4. `%USERPROFILE%\.env`
 
-Contents:
+Start from the template:
+
+```bat
+Copy-Item .env.example .env
+```
+
+`.env.example` documents every variable. The essential ones:
 
 ```ini
 ORACLE_USER=vector
@@ -49,6 +55,23 @@ ORACLE_DSN=localhost:1521/FREEPDB1
 GEMINI_API_KEY=
 GEMINI_MODEL=          # optional pin; otherwise models are tried in order
 ```
+
+`RAG_TABLE`, `RAG_EMBEDDING_MODEL` and `GEMINI_DAILY_LIMIT` are optional; the
+template shows their defaults.
+
+---
+
+## The notebook
+
+`notebook/oracle_agentic_rag_hybrid_search.ipynb` is the original lab and the
+source of the ten sample articles. It is safe to re-run:
+
+- it ingests only when the table is empty, and otherwise keeps what is there;
+- it skips HNSW index creation when the index already exists;
+- it never drops a populated table unless you set `REBUILD_SAMPLES = True` in
+  the ingest cell;
+- the cleanup section only *documents* the manual `DROP TABLE` statement, so
+  running the notebook cannot delete your corpus.
 
 ---
 
