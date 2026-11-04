@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import array
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -247,6 +248,7 @@ class Answer:
     elapsed: float = 0.0
     local: bool = False
     hits: list[Hit] = field(default_factory=list)
+    cached: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -494,6 +496,153 @@ class ModelMemory:
 
 
 # --------------------------------------------------------------------------- #
+# answer cache
+# --------------------------------------------------------------------------- #
+def hit_to_dict(hit: Hit) -> dict[str, Any]:
+    return {
+        "key": hit.key,
+        "source": hit.source,
+        "text": hit.text,
+        "score": hit.score,
+        "method": hit.method,
+        "detail": dict(hit.detail),
+    }
+
+
+def hit_from_dict(data: dict[str, Any]) -> Hit:
+    return Hit(
+        key=str(data.get("key", "")),
+        source=str(data.get("source", "unknown")),
+        text=str(data.get("text", "")),
+        score=float(data.get("score", 0.0) or 0.0),
+        method=str(data.get("method", "hybrid")),
+        detail={str(k): float(v) for k, v in (data.get("detail") or {}).items()},
+    )
+
+
+def answer_to_dict(answer: Answer) -> dict[str, Any]:
+    return {
+        "text": answer.text,
+        "model": answer.model,
+        "steps": [{"kind": s.kind, "label": s.label, "detail": s.detail} for s in answer.steps],
+        "sources": list(answer.sources),
+        "calls": answer.calls,
+        "elapsed": answer.elapsed,
+        "local": answer.local,
+        "hits": [hit_to_dict(hit) for hit in answer.hits],
+    }
+
+
+def answer_from_dict(data: dict[str, Any]) -> Answer:
+    steps = [
+        Step(
+            kind=str(step.get("kind", "note")),
+            label=str(step.get("label", "")),
+            detail=str(step.get("detail", "")),
+        )
+        for step in data.get("steps") or []
+        if isinstance(step, dict)
+    ]
+    sources = [dict(item) for item in data.get("sources") or [] if isinstance(item, dict)]
+    hits = [hit_from_dict(item) for item in data.get("hits") or [] if isinstance(item, dict)]
+    return Answer(
+        text=str(data.get("text", "")),
+        model=str(data.get("model", "unknown")),
+        steps=steps,
+        sources=sources,
+        calls=int(data.get("calls", 0) or 0),
+        elapsed=float(data.get("elapsed", 0.0) or 0.0),
+        local=bool(data.get("local")),
+        hits=hits,
+    )
+
+
+class AnswerCache:
+    """Answers remembered in data/answers.json, keyed by question and corpus.
+
+    The key contains a fingerprint of the corpus (row count plus a hash of the
+    ids), so adding or removing documents cannot serve an answer that predates
+    them. The file is plain JSON: inspect it, copy it, delete it.
+    """
+
+    VERSION = 1
+    MAX_ENTRIES = 200
+
+    def __init__(self, path: Path | None = None) -> None:
+        self.path = path or DATA_DIR / "answers.json"
+
+    def _read(self) -> dict[str, Any]:
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        if not isinstance(data, dict) or data.get("version") != self.VERSION:
+            return {"version": self.VERSION, "entries": {}}
+        entries = data.get("entries")
+        if not isinstance(entries, dict):
+            entries = {}
+        return {"version": self.VERSION, "entries": entries}
+
+    def _write(self, data: dict[str, Any]) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception:
+            pass  # a cache that breaks a request is worse than a cold cache
+
+    @staticmethod
+    def key(question: str, corpus: str, mode: str = "agent",
+            extra: dict[str, Any] | None = None) -> str:
+        payload = {
+            "q": " ".join((question or "").lower().split()),
+            "corpus": corpus,
+            "mode": mode,
+            "extra": extra or {},
+        }
+        raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+    def get(self, key: str) -> Answer | None:
+        entry = self._read()["entries"].get(key)
+        if not isinstance(entry, dict):
+            return None
+        try:
+            answer = answer_from_dict(entry.get("answer") or {})
+        except Exception:
+            return None
+        answer.cached = True
+        answer.elapsed = 0.0
+        return answer
+
+    def put(self, key: str, answer: Answer, question: str, corpus: str) -> None:
+        data = self._read()
+        entries = data["entries"]
+        entries[key] = {
+            "question": question,
+            "at": dt.datetime.now().isoformat(timespec="seconds"),
+            "corpus": corpus,
+            "answer": answer_to_dict(answer),
+        }
+        while len(entries) > self.MAX_ENTRIES:
+            oldest = min(entries, key=lambda item: str(entries[item].get("at", "")))
+            entries.pop(oldest, None)
+        self._write(data)
+
+    def stats(self) -> dict[str, Any]:
+        entries = self._read()["entries"]
+        try:
+            size_kb = round(self.path.stat().st_size / 1024, 1)
+        except Exception:
+            size_kb = 0.0
+        return {"entries": len(entries), "size_kb": size_kb, "path": self.path}
+
+    def clear(self) -> int:
+        count = len(self._read()["entries"])
+        self._write({"version": self.VERSION, "entries": {}})
+        return count
+
+
+# --------------------------------------------------------------------------- #
 # engine
 # --------------------------------------------------------------------------- #
 class RagEngine:
@@ -659,6 +808,23 @@ class RagEngine:
             ]
         finally:
             cur.close()
+
+    def corpus_fingerprint(self) -> str | None:
+        """Cheap identity of the current corpus, used to key cached answers."""
+        try:
+            if not self.table_exists():
+                return None
+            cur = self.ensure().cursor()
+            try:
+                cur.execute(
+                    f"SELECT COUNT(*), SUM(ORA_HASH(RAWTOHEX(id), 1000000)) FROM {self.s.table}"
+                )
+                rows, digest = cur.fetchone()
+            finally:
+                cur.close()
+            return f"{int(rows or 0)}:{int(digest or 0)}"
+        except Exception:
+            return None
 
     # -- retrieval ----------------------------------------------------------
     def _query_vector(self, query: str) -> array.array:
@@ -1032,10 +1198,11 @@ class Agent:
     """ReAct agent over the corpus, with quota-aware model fallback."""
 
     def __init__(self, engine: RagEngine, settings: Settings | None = None,
-                 quota: Quota | None = None) -> None:
+                 quota: Quota | None = None, cache: AnswerCache | None = None) -> None:
         self.engine = engine
         self.s = settings or engine.s
         self.quota = quota or Quota(limit=self.s.daily_limit)
+        self.cache = cache or AnswerCache()
         self.memory = ModelMemory()
         self._graphs: dict[str, Any] = {}
 
@@ -1078,12 +1245,10 @@ class Agent:
 
     # -- ask ----------------------------------------------------------------
     def ask(self, question: str, on_step: Callable[[str, str], None] | None = None,
-            recursion_limit: int = 25) -> Answer:
+            recursion_limit: int = 25, use_cache: bool = True) -> Answer:
         question = (question or "").strip()
         if not question:
             raise RagError("ask something first")
-        if not self.s.gemini_key:
-            raise NoModel("No GEMINI_API_KEY configured - use local mode, or add one to .env")
 
         def emit(kind: str, text: str) -> None:
             if on_step is not None:
@@ -1091,6 +1256,22 @@ class Agent:
                     on_step(kind, text)
                 except Exception:
                     pass
+
+        # A cached answer is served before the key check, so it still works on a
+        # machine whose quota is spent or whose key has been removed.
+        cache_key: str | None = None
+        corpus: str | None = None
+        if use_cache:
+            corpus = self.engine.corpus_fingerprint()
+            if corpus:
+                cache_key = self.cache.key(question, corpus)
+                cached = self.cache.get(cache_key)
+                if cached is not None:
+                    emit("note", "cached answer, no model call")
+                    return cached
+
+        if not self.s.gemini_key:
+            raise NoModel("No GEMINI_API_KEY configured - use local mode, or add one to .env")
 
         usable = self.usable_models()
         if not usable:
@@ -1141,7 +1322,7 @@ class Agent:
                 steps.append(Step("answer", "answer ready", ""))
                 emit("answer", "ready")
                 self.memory.set(model)
-                return Answer(
+                answer = Answer(
                     text=final,
                     model=model,
                     steps=steps,
@@ -1149,6 +1330,9 @@ class Agent:
                     calls=counter.calls,
                     elapsed=round(time.perf_counter() - started, 2),
                 )
+                if cache_key is not None and corpus:
+                    self.cache.put(cache_key, answer, question, corpus)
+                return answer
             except Exception as exc:                    # noqa: BLE001 - classified below
                 if _is_quota_error(exc):
                     self.quota.mark_exhausted(model, _first_line(exc))

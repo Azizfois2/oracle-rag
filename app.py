@@ -266,7 +266,8 @@ def render_sidebar(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
             '<div class="kv"><span>model</span><b>'
             f'{esc(agent.current_model() or "none available")}</b></div>'
             f'<div class="kv"><span>embeddings</span><b>MiniLM-L12</b></div>'
-            f'<div class="kv"><span>k</span><b>384 dims</b></div>',
+            f'<div class="kv"><span>k</span><b>384 dims</b></div>'
+            f'<div class="kv"><span>cache</span><b>{agent.cache.stats()["entries"]} answers</b></div>',
             unsafe_allow_html=True,
         )
         st.markdown("<div style='height:.4rem'></div>", unsafe_allow_html=True)
@@ -302,9 +303,19 @@ def render_answer_body(answer: rc.Answer) -> None:
             st.markdown(row_html(index, hit, "hybrid"), unsafe_allow_html=True)
     else:
         st.markdown(answer.text)
+        if answer.cached:
+            st.markdown(
+                '<p class="small">Cached: the same question against the same corpus, '
+                "answered earlier. No model was called.</p>",
+                unsafe_allow_html=True,
+            )
 
-    label = (f"{answer.calls} API calls · {answer.elapsed:.1f}s · {answer.model}"
-             if not answer.local else f"0 API calls · {answer.elapsed:.1f}s")
+    if answer.cached:
+        label = f"cached · 0 API calls · {answer.model}"
+    elif answer.local:
+        label = f"0 API calls · {answer.elapsed:.1f}s"
+    else:
+        label = f"{answer.calls} API calls · {answer.elapsed:.1f}s · {answer.model}"
     with st.expander(label):
         for step in answer.steps:
             glyph = GLYPH.get(step.kind, step.kind)
@@ -671,6 +682,9 @@ def tab_quality(engine: rc.RagEngine) -> None:
 # --------------------------------------------------------------------------- #
 def tab_health(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
                stats: dict, db: dict) -> None:
+    flash = st.session_state.pop("cache_flash", None)
+    if flash:
+        st.success(flash)
     docker = rc.container_status()
     left, right = st.columns(2, gap="large")
 
@@ -744,6 +758,19 @@ def tab_health(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
             f'<span class="mono">{esc(status["date"])}</span></p>',
             unsafe_allow_html=True,
         )
+
+        st.markdown('<h3 style="margin-top:1.1rem">Answer cache</h3>', unsafe_allow_html=True)
+        cache_info = agent.cache.stats()
+        st.markdown(
+            f'<div class="kv"><span>entries</span><b>{cache_info["entries"]}</b></div>'
+            f'<div class="kv"><span>size</span><b>{cache_info["size_kb"]} KB</b></div>'
+            f'<div class="kv"><span>file</span><b>{esc(cache_info["path"].name)}</b></div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("Clear answer cache", key="clear_cache"):
+            removed = agent.cache.clear()
+            st.session_state.cache_flash = f"Cleared {removed} cached answers."
+            st.rerun()
 
         st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
         if st.button("Re-check everything", key="recheck"):

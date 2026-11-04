@@ -69,6 +69,13 @@ def main() -> int:
         check(f"{page} renders without exception", not at.exception, str(at.exception))
         check(f"{page} content present", expected.lower() in markdown_text(at).lower(), expected)
 
+    at.segmented_control[0].set_value("Health").run()
+    health = markdown_text(at)
+    check("health shows the answer cache", "Answer cache" in health and "entries" in health)
+    check("sidebar shows the cache size", ">cache</span>" in health)
+    check("health offers clearing the cache",
+          any("Clear answer cache" in str(b.label) for b in at.button))
+
     print("\n" + "-" * 60)
     if failures:
         print(f"  {len(failures)} failed: {', '.join(failures)}")

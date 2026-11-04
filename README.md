@@ -56,7 +56,7 @@ GEMINI_MODEL=          # optional pin; otherwise models are tried in order
 
 | Surface | What it is for |
 |---|---|
-| **Ask** | ReAct agent over the corpus, with a trace: tool calls, queries, sources, API calls, latency. Local mode = no LLM, zero quota. |
+| **Ask** | ReAct agent over the corpus, with a trace: tool calls, queries, sources, API calls, latency. Local mode = no LLM, zero quota. A repeated question is served from cache with no call at all. |
 | **Search lab** | The same query through keyword, vector and hybrid at once - scores, snippets, overlap. The proof that hybrid earns its keep. |
 | **Corpus** | Source list, chunk counts, ingest text/files, delete a source, rebuild indexes. |
 | **Quality** | Labelled question set → hit@k and MRR per retrieval path, saved per run. |
@@ -72,12 +72,13 @@ oracle-rag/
 ├─ rag_core.py            the only contract: Oracle, retrieval, agent, quota
 ├─ START-GUI.bat          launcher (checks venv, deps, port)
 ├─ notebook/              the original lab notebook (canonical copy)
+├─ tools/restore_corpus.py re-ingest the ten samples from the notebook
 ├─ quality/questions.json labelled questions + expected source
 ├─ quality/run_eval.py    hit@k / MRR harness (CLI + used by the Quality tab)
 ├─ tests/smoke_test.py    engine tests, spend zero API quota
 ├─ tests/test_app.py      headless render + live search via streamlit.testing
 ├─ tests/test_db_down.py  the offline screen starts without a traceback
-├─ data/                  quota.json, model.json, eval-last.json (gitignored)
+├─ data/                  quota.json, model.json, answers.json, eval-last.json (gitignored)
 └─ logs/                  launcher logs (gitignored)
 ```
 
@@ -143,10 +144,20 @@ fusion rescues, and the numbers say so.
 
 ## Data safety
 
-The Oracle container has **no mounted volume**. `docker stop/start/restart` is
-safe; `docker rm` or deleting the container in Docker Desktop destroys the
-database. The app never drops tables on its own - deleting a source removes only
-that source's rows, behind a confirmation.
+The database lives in the Docker volume **`oracle-26ai-data`**, mounted at
+`/opt/oracle/oradata`, and the container is set to `--restart unless-stopped`, so
+it comes back with Docker. Stopping, restarting or even removing the container
+keeps that volume; deleting the volume itself is what destroys the data.
+
+The app never drops tables on its own - deleting a source removes only that
+source's rows, behind a confirmation.
+
+If the volume is ever lost, `START.bat /check` rebuilds the user and the vector
+memory setting, then this puts the ten sample articles back:
+
+```bat
+%USERPROFILE%\rag-venv\Scripts\python.exe tools\restore_corpus.py
+```
 
 ---
 
@@ -155,3 +166,8 @@ that source's rows, behind a confirmation.
 Roughly **20 requests per day per model**; one agent question costs 2–6. The app
 counts every call, marks exhausted models, and falls through to the next one.
 Local mode costs nothing and always works.
+
+Answers are cached in `data/answers.json`, keyed by the question **and a
+fingerprint of the corpus**, so asking the same thing twice costs zero calls and
+adding a document does not serve an answer that predates it. The Health tab shows
+the cache size and can clear it.

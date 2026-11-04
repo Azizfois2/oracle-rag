@@ -148,6 +148,52 @@ def main() -> int:
         quota.clear()
         check("clear resets", quota.status()["models"] == {})
 
+    print("\n== answer cache ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        cache = rc.AnswerCache(Path(tmp) / "answers.json")
+        fingerprint = engine.corpus_fingerprint()
+        check("corpus fingerprint computed", bool(fingerprint), str(fingerprint))
+
+        answer = rc.Answer(
+            text="Cached facts.",
+            model="test-model",
+            steps=[rc.Step("search", "vector", "1 hit")],
+            sources=[{"source": SCRATCH, "relevance": 0.9}],
+            calls=3,
+            elapsed=2.5,
+        )
+        key = cache.key("What is cached?", fingerprint)
+        cache.put(key, answer, "What is cached?", fingerprint)
+        got = cache.get(key)
+        check("cache returns the answer", bool(got) and got.text == "Cached facts.")
+        check("cache marks it as cached", bool(got) and got.cached)
+        check("cache keeps steps and sources",
+              bool(got) and got.steps[0].label == "vector"
+              and got.sources[0]["source"] == SCRATCH)
+        check("key ignores case and spacing",
+              cache.key("  what is   CACHED? ", fingerprint) == key)
+        check("key changes when the corpus changes",
+              cache.key("What is cached?", fingerprint + "x") != key)
+        check("stats reports one entry", cache.stats()["entries"] == 1,
+              str(cache.stats()["entries"]))
+        check("clear empties the cache",
+              cache.clear() == 1 and cache.stats()["entries"] == 0)
+
+        # a hit must be served without touching a model
+        cached_agent = rc.Agent(engine, settings, cache=cache)
+        hit_key = cache.key("Cached question", engine.corpus_fingerprint() or "")
+        cache.put(hit_key, rc.Answer(text="from cache", model="cached-model", calls=2, elapsed=1.0),
+                  "Cached question", engine.corpus_fingerprint() or "")
+
+        def fail(model: str) -> None:
+            raise AssertionError("the model was called despite a cache hit")
+
+        cached_agent._graph = fail                     # type: ignore[assignment]
+        served = cached_agent.ask("Cached question")
+        check("agent serves a hit without a model call",
+              served.text == "from cache" and served.cached, served.text)
+        check("cached answer reports zero elapsed", served.elapsed == 0.0)
+
     if want_llm:
         print("\n== agent (spends quota) ==")
         agent = rc.Agent(engine, settings)

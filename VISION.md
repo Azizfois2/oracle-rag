@@ -176,9 +176,11 @@ beyond a few seconds.
 | Corpus | `.sources()`, `.ingest(text, source)`, `.delete_source(s)`, `.reindex()` |
 | Agent | `Agent.ask(q, on_step=...)`, `ask_local(q)` |
 | Budget | `Quota.status()`, `.record()`, `.mark_exhausted()` |
+| Cache | `AnswerCache.key()`, `.get()`, `.put()`, `.stats()`, `.clear()` |
 
 Types: `Hit` (key, source, text, score, method, detail) and `Answer`
-(text, model, steps, sources, calls, elapsed). No dicts-of-dicts leaking into the UI.
+(text, model, steps, sources, calls, elapsed, cached). No dicts-of-dicts leaking
+into the UI.
 
 ---
 
@@ -206,8 +208,8 @@ Types: `Hit` (key, source, text, score, method, detail) and `Answer`
 
 | Constraint | Design consequence |
 |---|---|
-| Free Gemini: ~20 requests/day **per model**, 2–6 per question | Quota meter, local mode, no probe calls, model fallback, answer caching next |
-| Container has no mounted volume | The app warns before destructive actions; README states what `docker rm` destroys |
+| Free Gemini: ~20 requests/day **per model**, 2–6 per question | Quota meter, local mode, no probe calls, model fallback, answer cache |
+| Database must survive a rebuilt container | Named volume `oracle-26ai-data` plus `--restart unless-stopped`; the README says what deleting the volume destroys |
 | Windows, one machine, Python 3.11 venv | No Docker/Node build step; `.bat` launcher next to the existing one |
 | 8–16 GB RAM, CPU only | 384-dim MiniLM embeddings; no GPU assumptions; no torch re-download |
 | Beginner user | Every error message ends with the literal next action |
@@ -217,11 +219,15 @@ Types: `Hit` (key, source, text, score, method, detail) and `Answer`
 ## 11. Roadmap
 
 **v1 - now**
-Five surfaces, local mode, quota meter, eval harness, smoke tests.
+Five surfaces, local mode, quota meter, answer cache, eval harness, smoke tests.
+
+**v1.1**
+A named data volume with a restart policy, so a container rebuild or a reboot
+does not cost the corpus.
 
 **Next**
-Answer cache (same question = zero calls), local cross-encoder reranking,
-metadata filters (source, date), multi-collection support.
+Local cross-encoder reranking, metadata filters (source, date),
+multi-collection support, a larger labelled question set.
 
 **Later**
 Streaming answers, conversation history persisted in Oracle itself,
