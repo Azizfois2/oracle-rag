@@ -2,61 +2,249 @@
   {
     "question": "Which company raised an $85M Series B to build a hybrid search database?",
     "expect": "VectorForge",
+    "type": "single",
     "why": "single entity, exact name: keyword should be strong here"
   },
   {
     "question": "Who is challenging Pinecone and Weaviate on retrieval latency?",
     "expect": "VectorForge",
+    "type": "single",
     "why": "competitors named, answer implied: vector should help"
   },
   {
     "question": "What did AWS release for multi-agent orchestration on Bedrock?",
     "expect": "Bedrock Agents 2.0",
+    "type": "single",
     "why": "product name with a version number"
   },
   {
-    "question": "Which platform shipped Cortex AI Agents for enterprise data workflows?",
+    "question": "What are Snowflake's new agents for enterprise data workflows called?",
     "expect": "Cortex AI Agents",
+    "type": "single",
     "why": "product name that appears verbatim"
   },
   {
     "question": "How many monthly downloads did LangGraph reach?",
     "expect": "1 million monthly downloads",
+    "type": "single",
     "why": "numeric fact"
   },
   {
     "question": "Which small language model did Microsoft ship with the AI Foundry rebrand?",
     "expect": "Phi-4",
+    "type": "single",
     "why": "short model name, easy to confuse"
   },
   {
     "question": "What share of large organizations run at least one AI app in production?",
     "expect": "72%",
+    "type": "single",
     "why": "statistic in a survey document"
   },
   {
-    "question": "Which open-weight models did Meta and Mistral release within 48 hours?",
+    "question": "Which open-weight model did Meta release within 48 hours of Mistral's?",
     "expect": "Llama 4",
-    "why": "two entities, one expected answer"
+    "type": "single",
+    "why": "one model from a two-model article"
   },
   {
     "question": "Which NVIDIA GPU did the cloud partnerships centre on?",
     "expect": "H200",
+    "type": "single",
     "why": "short alphanumeric token"
   },
   {
     "question": "What does Oracle offer through OCI for petaflop-scale AI workloads?",
     "expect": "DGX SuperPOD",
+    "type": "single",
     "why": "Oracle-specific phrasing, appears in one document"
   },
   {
-    "question": "Why does hybrid retrieval matter for enterprise RAG according to the survey?",
-    "expect": "hybrid retrieval",
-    "why": "conceptual question with no single product name"
+    "question": "What are poorly implemented RAG pipelines a leading cause of, according to McKinsey?",
+    "expect": "hallucination complaints",
+    "type": "single",
+    "why": "conceptual phrasing; the exact consequence is in one document"
   },
   {
     "question": "What does Snowflake use to combine vector and BM25 scoring?",
     "expect": "Cortex Search",
+    "type": "single",
     "why": "feature name, semantic phrasing"
+  },
+  {
+    "question": "How much are NVIDIA's new cloud infrastructure commitments worth over three years?",
+    "expect": "$10 billion",
+    "type": "single",
+    "why": "large money figure in one document"
+  },
+  {
+    "question": "Which NVIDIA software stack is being integrated with each cloud provider's managed AI services?",
+    "expect": "CUDA",
+    "type": "single",
+    "why": "short technical name"
+  },
+  {
+    "question": "What was Databricks valued at in its 2024 secondary funding round?",
+    "expect": "$62 billion",
+    "type": "single",
+    "why": "valuation figure that competes with other dollar amounts"
+  },
+  {
+    "question": "Which MLflow 3.0 feature streams real-time metrics during long training runs?",
+    "expect": "LiveView",
+    "type": "single",
+    "why": "feature name that is easy to miss"
+  },
+  {
+    "question": "What scan performance improvement do Delta Lake 4.0 early adopters report?",
+    "expect": "40-60%",
+    "type": "single",
+    "why": "range statistic"
+  },
+  {
+    "question": "Which managed notebook environment gained real-time co-editing and persistent kernels?",
+    "expect": "Vertex AI Workbench",
+    "type": "single",
+    "why": "product name described by its features, not its name"
+  },
+  {
+    "question": "How many foundation models does Vertex AI Model Garden now host?",
+    "expect": "over 200",
+    "type": "single",
+    "why": "quantity phrased as an approximation"
+  },
+  {
+    "question": "How many concurrent agent sessions can Vertex AI Agent Engine handle per project?",
+    "expect": "1,000 concurrent",
+    "type": "single",
+    "why": "numeric capacity with a comma"
+  },
+  {
+    "question": "How large is Microsoft's Phi-4 model?",
+    "expect": "14-billion-parameter",
+    "type": "single",
+    "why": "parameter count written with a hyphen"
+  },
+  {
+    "question": "Which Azure AI Foundry feature detects jailbreak and indirect injection attacks?",
+    "expect": "Prompt Shields",
+    "type": "single",
+    "why": "security feature name"
+  },
+  {
+    "question": "How much has Amazon invested in Anthropic?",
+    "expect": "$4 billion",
+    "type": "single",
+    "why": "investment figure that is smaller than NVIDIA's"
+  },
+  {
+    "question": "How many data source connectors do Bedrock knowledge bases now support?",
+    "expect": "15 data source connectors",
+    "type": "single",
+    "why": "count plus noun, not just a number"
+  },
+  {
+    "question": "Which startup is building hybrid search for OCI, and which NVIDIA platform will OCI offer for petaflop AI?",
+    "expect": null,
+    "expect_all": ["VectorForge", "DGX SuperPOD"],
+    "type": "cross",
+    "why": "two documents: VectorForge plans an OCI deployment, Oracle offers DGX SuperPOD"
+  },
+  {
+    "question": "Which Oracle integration connects LangChain to HNSW vector indexes, and which NVIDIA GPU do the new cloud partnerships centre on?",
+    "expect": null,
+    "expect_all": ["OracleVectorStore", "H200"],
+    "type": "cross",
+    "why": "two documents: the LangChain integration and NVIDIA infrastructure"
+  },
+  {
+    "question": "Which investor backed VectorForge, and which lakehouse platform did Databricks overhaul?",
+    "expect": null,
+    "expect_all": ["Databricks Ventures", "Mosaic AI"],
+    "type": "cross",
+    "why": "two documents: the funding round and the Databricks release"
+  },
+  {
+    "question": "Which implementation service did Snowflake launch with Accenture, and which consultancy tested NVIDIA's on-premises stack alongside SAP?",
+    "expect": null,
+    "expect_all": ["Cortex Agent implementation services", "Deloitte"],
+    "type": "cross",
+    "why": "two documents: Snowflake's Accenture partnership and NVIDIA's early access partners"
+  },
+  {
+    "question": "Which Microsoft small model can run on-premises, and which Anthropic model is the default for Bedrock Agents?",
+    "expect": null,
+    "expect_all": ["Phi-4", "Claude 3.7 Sonnet"],
+    "type": "cross",
+    "why": "two documents: Microsoft models and AWS defaults"
+  },
+  {
+    "question": "Which Google platform hosts Llama 4, and which Mistral model shipped within 48 hours of it?",
+    "expect": null,
+    "expect_all": ["Model Garden", "Mistral Large 2"],
+    "type": "cross",
+    "why": "two documents: Google's catalogue and the open-weight release"
+  },
+  {
+    "question": "What share of large organizations run AI in production, and which LangChain product has 80,000 monthly users?",
+    "expect": null,
+    "expect_all": ["72%", "LangSmith"],
+    "type": "cross",
+    "why": "two documents: the McKinsey survey and the LangChain ecosystem"
+  },
+  {
+    "question": "What share of organizations are piloting agents, and which startup raised an $85M Series B?",
+    "expect": null,
+    "expect_all": ["Forty-one percent", "VectorForge"],
+    "type": "cross",
+    "why": "two documents: agent adoption and the VectorForge funding"
+  },
+  {
+    "question": "What did OpenAI announce at its March 2026 developer conference?",
+    "expect": null,
+    "type": "unanswerable",
+    "why": "OpenAI is mentioned as a partner, but no conference or announcement is described"
+  },
+  {
+    "question": "How many employees does Anthropic have?",
+    "expect": null,
+    "type": "unanswerable",
+    "why": "Anthropic appears only through its models and Amazon investment"
+  },
+  {
+    "question": "What was Oracle's total revenue in fiscal 2026?",
+    "expect": null,
+    "type": "unanswerable",
+    "why": "Oracle appears as a cloud and database vendor, never with revenue figures"
+  },
+  {
+    "question": "Which quantum computing startup did Google acquire in 2026?",
+    "expect": null,
+    "type": "unanswerable",
+    "why": "no quantum computing story in the corpus"
+  },
+  {
+    "question": "What does VectorForge charge per month for its managed cloud service?",
+    "expect": null,
+    "type": "unanswerable",
+    "why": "the article describes the product but gives no price"
+  },
+  {
+    "question": "How many GPUs are in a single DGX SuperPOD configuration?",
+    "expect": null,
+    "type": "unanswerable",
+    "why": "DGX SuperPOD is named, but its GPU count is absent"
+  },
+  {
+    "question": "Which country banned open-weight AI models in 2026?",
+    "expect": null,
+    "type": "unanswerable",
+    "why": "the corpus discusses open weights but no ban"
+  },
+  {
+    "question": "What did Andy Jassy say about AGI timelines?",
+    "expect": null,
+    "type": "unanswerable",
+    "why": "Jassy is not quoted anywhere in the corpus"
   }
 ]

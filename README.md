@@ -99,7 +99,7 @@ source of the ten sample articles. It is safe to re-run:
 | **Ask** | ReAct agent over the corpus, with a trace: tool calls, queries, sources, API calls, latency. Local mode = no LLM, zero quota. A repeated question is served from cache with no call at all. |
 | **Search lab** | The same query through keyword, vector and hybrid at once - scores, snippets, overlap. The proof that hybrid earns its keep. |
 | **Corpus** | Source list, chunk counts, ingest text/files, delete a source, rebuild indexes. |
-| **Quality** | Labelled question set → hit@k and MRR per retrieval path, saved per run. |
+| **Quality** | 40 labelled questions (single, cross-document, unanswerable) → hit@k and MRR per retrieval path, saved per run. |
 | **Health** | Database version, container state, indexes, embedding model, key presence, per-model quota with reset time, answer cache, corpus backup. |
 
 ---
@@ -116,7 +116,7 @@ oracle-rag/
   tools/restore_corpus.py re-ingest the ten samples from the notebook
   tools/export_corpus.py  write the corpus to one JSON file
   tools/import_corpus.py  restore that file, re-embedding the text
-  quality/questions.json  labelled questions + expected source
+  quality/questions.json  40 labelled questions: single, cross, unanswerable
   quality/run_eval.py     hit@k / MRR harness (CLI + used by the Quality tab)
   tests/smoke_test.py     engine tests, spend zero API quota
   tests/test_app.py       headless render + live search via streamlit.testing
@@ -161,18 +161,33 @@ spends quota. `test_cli.py` runs `ask.py` in local mode, so it costs nothing.
 At either extreme the ranking is exactly the pure path, not an approximation.
 Scores are computed in `rag_core.py` exactly as shown - copy the SQL and re-run it.
 
-**Measured on the 12 labelled questions, k = 5** (Quality tab, weight 0.6):
+**Measured on 40 labelled questions, k = 5** (Quality tab, weight 0.6). The set
+has 24 single-document questions, 8 cross-document questions and 8 whose answer
+is not in the corpus. A cross-document hit requires every expected string to be
+inside the top k, not just one of them.
 
-| Path | hit@5 | MRR | notes |
-|---|---|---|---|
-| Keyword | 0.92 | 0.83 | misses the Oracle OCI question entirely |
-| Vector | 1.00 | 0.96 | finds everything, ranks first 11/12 |
-| Hybrid | 1.00 | 0.96 | recovers the keyword miss, matches vector on rank |
+| Path | hit@5 single | hit@5 cross | MRR single | MRR cross |
+|---|---|---|---|---|
+| Keyword | 0.96 | 0.88 | 0.84 | 0.36 |
+| Vector | 1.00 | 1.00 | 0.92 | 0.40 |
+| Hybrid | 1.00 | 1.00 | 0.98 | 0.44 |
 
-Hybrid does not beat vector on this ten-document sample. That is the honest
-result, and the Search lab shows why: at this size the vector pool already holds
-the answer, so fusion has nothing extra to add. The keyword path is what the
-fusion rescues, and the numbers say so.
+At k = 5 from ten documents, hit@5 is a low bar: half the corpus is returned.
+MRR is the more discriminating number, and it shows where the difficulty is.
+Cross-document questions are much harder: the second required chunk often lands
+later in the list. Hybrid leads on MRR in both sets, but the margin over vector
+is small.
+
+The unanswerable questions are not scored as hits. Their vector top score
+averages **0.41** (range 0.20-0.53), against **0.53** for answerable questions
+(range 0.27-0.76). Those ranges overlap, so cosine similarity alone is not a
+safe "I don't know" signal. Keyword scores are normalised per query, so the best
+match is always 1.00 and cannot be used as confidence.
+
+Hybrid does not win by a large margin on this ten-document sample. That is the
+honest result, and the Search lab shows why: at this size the vector pool already
+holds the answer, so fusion has more to do with ordering than with finding. The
+keyword path is what fusion rescues when it misses.
 
 ---
 

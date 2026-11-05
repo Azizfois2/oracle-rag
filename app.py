@@ -20,7 +20,8 @@ import pandas as pd
 import streamlit as st
 
 import rag_core as rc
-from quality.run_eval import evaluate, load_last, load_questions, save_run
+from quality.run_eval import (evaluate, load_last, load_questions, question_type,
+                              questions_digest, save_run)
 
 # --------------------------------------------------------------------------- #
 # constants
@@ -616,10 +617,16 @@ def tab_corpus(engine: rc.RagEngine, settings: rc.Settings) -> None:
 # --------------------------------------------------------------------------- #
 def tab_quality(engine: rc.RagEngine) -> None:
     questions = load_questions()
+    counts = {kind: sum(1 for item in questions if question_type(item) == kind)
+              for kind in ("single", "cross", "unanswerable")}
     st.markdown(
-        f'<p class="small">{len(questions)} labelled questions, run against all three paths. '
-        "A hit means the expected string appears in the retrieved chunk or its source. "
-        "No model is called, so a full run costs nothing.</p>",
+        f'<p class="small">{len(questions)} labelled questions: '
+        f'{counts["single"]} single-document, {counts["cross"]} cross-document, '
+        f'{counts["unanswerable"]} unanswerable. A hit means the expected string '
+        "appears in the retrieved chunk or its source. Cross-document hits need "
+        "every expected string in the top k. Unanswerable questions are not "
+        "scored as hits; their vector similarity is compared with answerable "
+        "questions. No model is called, so a full run costs nothing.</p>",
         unsafe_allow_html=True,
     )
 
@@ -638,41 +645,111 @@ def tab_quality(engine: rc.RagEngine) -> None:
                 return
 
     result = st.session_state.get("eval") or load_last()
+    if result and (result.get("version") != 2
+                   or result.get("questions_hash") != questions_digest(questions)):
+        st.info("The labelled question set changed since this run. "
+                "Press Run evaluation to refresh it.")
+        return
     if not result:
         st.markdown('<p class="small">No run yet. Press Run evaluation.</p>',
                     unsafe_allow_html=True)
         return
 
+    progress = {
+        "path": st.column_config.TextColumn("path", width="small"),
+        "hit@k": st.column_config.ProgressColumn(
+            "hit@k", min_value=0.0, max_value=1.0, format="%.2f"),
+        "MRR": st.column_config.ProgressColumn(
+            "MRR", min_value=0.0, max_value=1.0, format="%.2f"),
+    }
     summary = pd.DataFrame([
         {"path": LABEL[m], "hit@k": result["summary"][m]["hit"],
          "MRR": result["summary"][m]["mrr"],
-         "found": f"{result['summary'][m]['found']}/{len(result['rows'])}"}
+         "found": f"{result['summary'][m]['found']}/{result['summary'][m]['n']}"}
         for m in METHODS
     ])
-    st.dataframe(
-        summary, hide_index=True,
-        column_config={
-            "path": st.column_config.TextColumn("path", width="small"),
-            "hit@k": st.column_config.ProgressColumn(
-                "hit@k", min_value=0.0, max_value=1.0, format="%.2f"),
-            "MRR": st.column_config.ProgressColumn(
-                "MRR", min_value=0.0, max_value=1.0, format="%.2f"),
-        },
-    )
+    st.dataframe(summary, hide_index=True, column_config=progress)
     st.markdown(
         f'<p class="small">k = {result["k"]} · hybrid weight {result["weight"]} · '
-        f'{result["elapsed"]}s · run at {result["at"].replace("T", " ")}</p>',
+        f'{result["elapsed"]}s · run at {result["at"].replace("T", " ")} · '
+        f'{result["question_count"]} questions</p>',
         unsafe_allow_html=True,
     )
 
+    breakdown = []
+    for kind, label in (("single", "Single document"), ("cross", "Cross document")):
+        block = (result.get("by_type") or {}).get(kind)
+        if not block:
+            continue
+        for method in METHODS:
+            breakdown.append({
+                "set": label,
+                "path": LABEL[method],
+                "hit@k": block[method]["hit"],
+                "MRR": block[method]["mrr"],
+                "found": f"{block[method]['found']}/{block[method]['n']}",
+            })
+    if breakdown:
+        st.markdown('<h3 style="margin-top:1.1rem">By question type</h3>',
+                    unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame(breakdown), hide_index=True, column_config=progress)
+
+    unanswerable = result.get("unanswerable") or {}
+    if unanswerable:
+        st.markdown('<h3 style="margin-top:1.1rem">Unanswerable questions</h3>',
+                    unsafe_allow_html=True)
+        st.markdown(
+            '<p class="small">These are not scored as hits: retrieval always '
+            "returns k chunks. Vector cosine is the only absolute similarity "
+            "here. Keyword scores are normalised per query, so their best match "
+            "is always 1.00, and hybrid scores are fused from them; neither is "
+            "a confidence measure. The table compares the vector top score "
+            "with answerable questions.</p>",
+            unsafe_allow_html=True,
+        )
+        base = (result.get("answerable_tops") or {}).get("vector") or {}
+        scores = unanswerable["vector"]
+        st.dataframe(
+            pd.DataFrame([
+                {"set": "Answerable", "min top": base.get("min_top", 0.0),
+                 "mean top": base.get("mean_top", 0.0),
+                 "max top": base.get("max_top", 0.0)},
+                {"set": "Unanswerable", "min top": scores["min_top"],
+                 "mean top": scores["mean_top"], "max top": scores["max_top"]},
+            ]),
+            hide_index=True,
+            column_config={
+                "set": st.column_config.TextColumn("set", width="small"),
+                "min top": st.column_config.NumberColumn(format="%.2f", width="small"),
+                "mean top": st.column_config.NumberColumn(format="%.2f", width="small"),
+                "max top": st.column_config.NumberColumn(format="%.2f", width="small"),
+            },
+        )
+
     rows = []
     for row in result["rows"]:
+        kind = row.get("type", "single")
+        if kind == "cross":
+            expected = " + ".join(row.get("expect_all") or [])
+        elif kind == "unanswerable":
+            expected = "not in corpus"
+        else:
+            expected = row.get("expect")
+
+        def cell(method: str) -> str:
+            if kind == "unanswerable":
+                return "n/a"
+            value = row[method]
+            return "miss" if value is None else f"#{value}"
+
         rows.append({
             "question": row["question"],
-            "keyword": "miss" if row["keyword"] is None else f'#{row["keyword"]}',
-            "vector": "miss" if row["vector"] is None else f'#{row["vector"]}',
-            "hybrid": "miss" if row["hybrid"] is None else f'#{row["hybrid"]}',
-            "expected": row["expect"],
+            "set": kind,
+            "keyword": cell("keyword"),
+            "vector": cell("vector"),
+            "hybrid": cell("hybrid"),
+            "top cosine": f'{float(row.get("vector_top", 0.0)):.2f}',
+            "expected": expected,
         })
     with st.expander("Per question"):
         st.dataframe(pd.DataFrame(rows), hide_index=True)

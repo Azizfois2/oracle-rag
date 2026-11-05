@@ -116,10 +116,15 @@ One query, three retrieval paths, one screen.
 silently duplicated.
 
 ### Quality - *the honesty*
-A small labelled question set, run against all three paths.
-- hit@k and MRR per method, side by side.
-- Per-question breakdown: which method found the expected document, at what rank.
-- Results saved to `data/eval-last.json` so runs are comparable over time.
+A 40-question labelled set, run against all three paths.
+- 24 single-document, 8 cross-document, 8 unanswerable.
+- Cross-document hits require every expected string in the top k.
+- hit@k and MRR per method, plus a single-versus-cross breakdown.
+- Unanswerable questions are not scored as hits. Their vector top score is
+  compared with answerable questions; keyword scores are normalised per query,
+  so they are not a confidence measure.
+- Results saved to `data/eval-last.json` so runs are comparable over time, and a
+  changed question file invalidates the stored run.
 
 *Success:* changing a parameter has a number attached to it.
 *Failure:* a question nobody can retrieve - visible, not swept away.
@@ -230,9 +235,14 @@ does not cost the corpus.
 Corpus export/import, a download button in Health, and a terminal CLI, so a
 volume loss is recoverable and the corpus is scriptable outside the browser.
 
+**v1.3**
+A 40-question benchmark: 24 single-document, 8 cross-document, 8 unanswerable.
+Cross-document hits require every expected string in the top k. Unanswerable
+questions are compared with answerable ones instead of being scored as hits.
+
 **Next**
-Local cross-encoder reranking, metadata filters (source, date),
-multi-collection support, a larger labelled question set.
+Local cross-encoder reranking judged against the 40-question baseline, metadata
+filters (source, date), multi-collection support.
 
 **Later**
 Streaming answers, conversation history persisted in Oracle itself,

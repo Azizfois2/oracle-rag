@@ -13,11 +13,17 @@ import json
 import sys
 import tempfile
 import time
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
 import rag_core as rc
+from quality.run_eval import (_block, _rank, load_questions, needles_for,
+                              question_type, questions_digest)
+from tools.restore_corpus import documents_from_notebook
 
 SCRATCH = "__smoke_test__.md"
 results: list[tuple[bool, str, str]] = []
@@ -46,6 +52,64 @@ def main() -> int:
     check("chunk_text splits and respects size", len(chunks) > 1 and all(len(c) <= 420 for c in chunks),
           f"{len(chunks)} chunks, max {max(len(c) for c in chunks)} chars")
     check("chunk_text handles tiny input", rc.chunk_text("hello world") == ["hello world"])
+
+    print("\n== quality questions ==")
+    questions = load_questions()
+    kinds = [question_type(item) for item in questions]
+    counts = {kind: kinds.count(kind) for kind in ("single", "cross", "unanswerable")}
+    check("question set has 40 entries", len(questions) == 40, str(len(questions)))
+    check("question mix is 24 single / 8 cross / 8 unanswerable",
+          counts == {"single": 24, "cross": 8, "unanswerable": 8}, str(counts))
+    check("single and cross questions have needles",
+          all(needles_for(q) for q, kind in zip(questions, kinds) if kind != "unanswerable"))
+    check("cross questions need at least two needles",
+          all(len(needles_for(q)) >= 2 for q, kind in zip(questions, kinds) if kind == "cross"))
+    check("unanswerable questions have no needles",
+          all(not needles_for(q) for q, kind in zip(questions, kinds) if kind == "unanswerable"))
+    check("question digest is stable",
+          questions_digest(questions) == questions_digest(load_questions()))
+
+    with redirect_stdout(StringIO()):
+        sample = documents_from_notebook(
+            ROOT / "notebook" / "oracle_agentic_rag_hybrid_search.ipynb")
+    haystack = "\n".join(
+        str(doc.metadata.get("source", "")) + "\n" + doc.page_content for doc in sample
+    ).lower()
+    missing = [needle for item, kind in zip(questions, kinds)
+               if kind != "unanswerable"
+               for needle in needles_for(item) if needle.lower() not in haystack]
+    check("every expected string exists in the sample corpus", not missing,
+          str(missing[:3]))
+
+    hits = [
+        rc.Hit("a", "doc_a.md", "Alpha evidence", 0.9, "vector"),
+        rc.Hit("b", "doc_b.md", "Beta evidence", 0.8, "vector"),
+        rc.Hit("c", "doc_c.md", "Gamma evidence", 0.7, "vector"),
+    ]
+    check("_rank finds a single needle", _rank(hits, ["Beta"]) == 2)
+    check("_rank takes the later of two needles", _rank(hits, ["Alpha", "Gamma"]) == 3)
+    check("_rank is case-insensitive", _rank(hits, ["beta"]) == 2)
+    check("_rank also matches the source name", _rank(hits, ["doc_b"]) == 2)
+    check("_rank returns None when a needle is absent", _rank(hits, ["Alpha", "Delta"]) is None)
+    check("_rank with no needles is None", _rank(hits, []) is None)
+
+    ranked = [
+        {"keyword": 1, "vector": 2, "hybrid": None},
+        {"keyword": 10, "vector": None, "hybrid": 4},
+    ]
+    block = _block(ranked, k=5)
+    check("_block counts keyword hits inside k",
+          block["keyword"]["hit"] == 0.5 and block["keyword"]["found"] == 2,
+          str(block["keyword"]))
+    check("_block treats None as a miss",
+          block["hybrid"]["hit"] == 0.5 and block["hybrid"]["found"] == 1,
+          str(block["hybrid"]))
+    check("_block excludes misses from MRR",
+          block["vector"]["mrr"] == 0.25, str(block["vector"]))
+    check("question_type infers cross from expect_all",
+          question_type({"expect_all": ["A", "B"]}) == "cross")
+    check("question_type infers unanswerable from an empty expect",
+          question_type({"expect": None}) == "unanswerable")
 
     print("\n== container ==")
     docker = rc.container_status()

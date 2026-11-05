@@ -31,6 +31,10 @@ def markdown_text(at: AppTest) -> str:
     return "\n".join(str(getattr(element, "value", "")) for element in at.markdown)
 
 
+def alert_text(at: AppTest) -> str:
+    return "\n".join(str(getattr(element, "value", "")) for element in at.info)
+
+
 def main() -> int:
     at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=240)
     at.run()
@@ -69,6 +73,67 @@ def main() -> int:
         at.segmented_control[0].set_value(page).run()
         check(f"{page} renders without exception", not at.exception, str(at.exception))
         check(f"{page} content present", expected.lower() in markdown_text(at).lower(), expected)
+
+    print("\n== quality tab ==")
+    at.segmented_control[0].set_value("Quality").run()
+    body = markdown_text(at)
+    check("quality states the question mix",
+          "24 single-document" in body and "8 cross-document" in body
+          and "8 unanswerable" in body)
+    run_eval = [b for b in at.button if "Run evaluation" in str(b.label)]
+    check("quality offers running the evaluation", bool(run_eval))
+    if run_eval:
+        run_eval[0].click().run()
+        check("evaluation runs without exception", not at.exception, str(at.exception))
+        result = at.session_state.get("eval")
+        check("evaluation stored in session", isinstance(result, dict), type(result).__name__)
+        if isinstance(result, dict):
+            check("evaluation is schema 2", result.get("version") == 2,
+                  str(result.get("version")))
+            check("evaluation covers 40 questions",
+                  result.get("question_count") == 40, str(result.get("question_count")))
+            check("evaluation has 40 rows", len(result.get("rows") or []) == 40)
+            check("evaluation keeps all three paths",
+                  set(result.get("summary") or {}) == {"keyword", "vector", "hybrid"})
+            check("evaluation splits by question type",
+                  set(result.get("by_type") or {}) == {"single", "cross"})
+            check("evaluation has unanswerable stats",
+                  set(result.get("unanswerable") or {}) == {"keyword", "vector", "hybrid"})
+            check("evaluation has answerable top scores",
+                  set(result.get("answerable_tops") or {}) == {"keyword", "vector", "hybrid"})
+            check("evaluation records the question hash", bool(result.get("questions_hash")))
+
+        frames = [frame.value for frame in at.dataframe]
+        summary = next((f for f in frames
+                        if {"path", "hit@k", "MRR", "found"} <= set(f.columns)
+                        and "set" not in f.columns), None)
+        check("summary table rendered", summary is not None and len(summary) == 3,
+              "none" if summary is None else str(len(summary)))
+        breakdown = next((f for f in frames
+                          if {"set", "path", "hit@k", "MRR"} <= set(f.columns)), None)
+        check("type breakdown rendered", breakdown is not None and len(breakdown) == 6,
+              "none" if breakdown is None else str(len(breakdown)))
+        comparison = next((f for f in frames
+                           if {"set", "mean top", "min top"} <= set(f.columns)), None)
+        check("unanswerable comparison rendered",
+              comparison is not None and len(comparison) == 2,
+              "none" if comparison is None else str(len(comparison)))
+        per_question = next((f for f in frames
+                             if {"question", "set", "top cosine"} <= set(f.columns)), None)
+        check("per-question table rendered",
+              per_question is not None and len(per_question) == 40,
+              "none" if per_question is None else str(len(per_question)))
+        if per_question is not None:
+            check("per-question marks unanswerable rows",
+                  int((per_question["set"] == "unanswerable").sum()) == 8)
+            check("per-question shows ranks for answerable rows",
+                  any(str(value).startswith("#") for value in per_question["hybrid"]))
+
+        stale = dict(result) if isinstance(result, dict) else {}
+        stale["questions_hash"] = "stale"
+        at.session_state["eval"] = stale
+        at.run()
+        check("stale evaluation is rejected", "question set changed" in alert_text(at))
 
     at.segmented_control[0].set_value("Health").run()
     health = markdown_text(at)
