@@ -227,8 +227,8 @@ A named data volume with a restart policy, so a container rebuild or a reboot
 does not cost the corpus.
 
 **v1.2**
-Corpus export/import and a terminal CLI, so a volume loss is recoverable and the
-corpus is scriptable outside the browser.
+Corpus export/import, a download button in Health, and a terminal CLI, so a
+volume loss is recoverable and the corpus is scriptable outside the browser.
 
 **Next**
 Local cross-encoder reranking, metadata filters (source, date),

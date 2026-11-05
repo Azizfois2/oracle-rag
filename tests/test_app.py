@@ -9,6 +9,7 @@ retrieval form.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -75,6 +76,30 @@ def main() -> int:
     check("sidebar shows the cache size", ">cache</span>" in health)
     check("health offers clearing the cache",
           any("Clear answer cache" in str(b.label) for b in at.button))
+    check("health shows the corpus backup", "Corpus backup" in health)
+    check("health offers preparing a backup",
+          any("Prepare corpus backup" in str(b.label) for b in at.button))
+
+    at.button(key="prepare_backup").click().run()
+    check("backup prepares without exception", not at.exception, str(at.exception))
+    backup = at.session_state.get("backup")
+    check("backup stored in session", isinstance(backup, dict), type(backup).__name__)
+    if isinstance(backup, dict):
+        check("backup includes every chunk", backup.get("chunks", 0) >= 10,
+              str(backup.get("chunks")))
+        name = str(backup.get("name", ""))
+        check("backup filename is timestamped json",
+              name.startswith("corpus-") and name.endswith(".json"), name)
+        try:
+            parsed = json.loads(backup["data"])
+            valid = (parsed.get("format") == "oracle-rag-corpus"
+                     and len(parsed.get("documents") or []) == backup.get("chunks"))
+        except Exception:
+            valid = False
+        check("backup bytes are a valid export", valid)
+    downloads = [d for d in at.download_button if d.key == "download_backup"]
+    check("download button offered",
+          len(downloads) == 1 and "Download backup" in str(downloads[0].label))
 
     print("\n" + "-" * 60)
     if failures:

@@ -7,6 +7,7 @@ that touches Oracle or Gemini lives in rag_core.py.
 from __future__ import annotations
 
 import html
+import json
 import os
 import time
 from pathlib import Path
@@ -771,6 +772,44 @@ def tab_health(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
             removed = agent.cache.clear()
             st.session_state.cache_flash = f"Cleared {removed} cached answers."
             st.rerun()
+
+        st.markdown('<h3 style="margin-top:1.1rem">Corpus backup</h3>', unsafe_allow_html=True)
+        backup = st.session_state.get("backup")
+        if st.button("Prepare corpus backup", key="prepare_backup"):
+            try:
+                payload = engine.export_corpus()
+            except rc.RagError as exc:
+                st.error(str(exc))
+            else:
+                data = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+                sources = {item["source"] for item in payload["documents"]}
+                backup = {
+                    "data": data,
+                    "name": f"corpus-{time.strftime('%Y%m%d-%H%M%S')}.json",
+                    "chunks": len(payload["documents"]),
+                    "sources": len(sources),
+                }
+                st.session_state.backup = backup
+        if backup:
+            st.download_button(
+                "Download backup",
+                data=backup["data"],
+                file_name=backup["name"],
+                mime="application/json",
+                key="download_backup",
+            )
+            st.markdown(
+                f'<p class="small">{backup["chunks"]} chunks from {backup["sources"]} '
+                f'sources, {len(backup["data"]) / 1024:.1f} KB. Embeddings are '
+                "recomputed on import.</p>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<p class="small">One JSON file with the text of every chunk. '
+                "Prepare it again after adding documents.</p>",
+                unsafe_allow_html=True,
+            )
 
         st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
         if st.button("Re-check everything", key="recheck"):

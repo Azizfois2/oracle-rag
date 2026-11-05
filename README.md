@@ -100,7 +100,7 @@ source of the ten sample articles. It is safe to re-run:
 | **Search lab** | The same query through keyword, vector and hybrid at once - scores, snippets, overlap. The proof that hybrid earns its keep. |
 | **Corpus** | Source list, chunk counts, ingest text/files, delete a source, rebuild indexes. |
 | **Quality** | Labelled question set → hit@k and MRR per retrieval path, saved per run. |
-| **Health** | Database version, container state, indexes, embedding model, key presence, per-model quota with reset time. |
+| **Health** | Database version, container state, indexes, embedding model, key presence, per-model quota with reset time, answer cache, corpus backup. |
 
 ---
 
@@ -208,6 +208,11 @@ memory setting, then this puts the ten sample articles back:
 That restores only the ten samples. Anything you ingest yourself needs a backup.
 
 ### Backup and restore
+
+Easiest: **Health -> Prepare corpus backup -> Download backup**. The file lands
+in your Downloads folder, ready to copy somewhere else.
+
+From the terminal, the same export:
 
 ```bat
 %USERPROFILE%\rag-venv\Scripts\python.exe tools\export_corpus.py
