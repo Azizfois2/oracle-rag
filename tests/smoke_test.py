@@ -129,8 +129,38 @@ def main() -> int:
     except rc.RagError:
         duplicate_blocked = True
     check("duplicate source refused", duplicate_blocked)
+
+    exported = engine.export_corpus()
+    check("export covers every row",
+          len(exported["documents"]) == engine.stats()["rows"],
+          f"{len(exported['documents'])} documents")
+    scratch_chunks = [d for d in exported["documents"] if d["source"] == SCRATCH]
+    check("export keeps the scratch chunks", len(scratch_chunks) == added["chunks"],
+          f"{len(scratch_chunks)} chunks")
+    check("export stores text, not embeddings",
+          all("embedding" not in d for d in exported["documents"]))
+    check("export records the embedding model", bool(exported.get("embedding_model")),
+          str(exported.get("embedding_model")))
+
     removed = engine.delete_source(SCRATCH)
     check("delete removed the chunks", removed == added["chunks"], f"{removed} rows")
+    check("source is gone before import", not engine.source_exists(SCRATCH))
+
+    restored = engine.import_documents(scratch_chunks)
+    check("import restores the chunks",
+          restored["chunks"] == added["chunks"] and engine.source_exists(SCRATCH),
+          f"{restored['chunks']} chunks")
+    again = engine.import_documents(scratch_chunks)
+    check("import skips an existing source by default",
+          again["chunks"] == 0 and again["skipped"] == added["chunks"],
+          f"{again['skipped']} skipped")
+    replaced = engine.import_documents(scratch_chunks, replace=True)
+    check("import replaces on request",
+          replaced["replaced"] == 1 and replaced["chunks"] == added["chunks"],
+          f"replaced {replaced['replaced']}")
+
+    removed = engine.delete_source(SCRATCH)
+    check("delete removed the chunks again", removed == added["chunks"], f"{removed} rows")
     check("row count restored", engine.stats()["rows"] == before)
 
     print("\n== quota bookkeeping ==")

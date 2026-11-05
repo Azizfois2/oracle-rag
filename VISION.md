@@ -173,10 +173,11 @@ beyond a few seconds.
 | Config | `Settings.from_env()`, `Settings.models()` |
 | Connection | `RagEngine.connect()`, `.ensure()`, `.stats()` |
 | Retrieval | `.keyword_search(q,k)`, `.vector_search(q,k)`, `.hybrid_search(q,k,w)`, `.search_all(q,k,w)` |
-| Corpus | `.sources()`, `.ingest(text, source)`, `.delete_source(s)`, `.reindex()` |
+| Corpus | `.sources()`, `.ingest(text, source)`, `.delete_source(s)`, `.reindex()`, `.export_corpus()`, `.import_documents(docs, replace=)` |
 | Agent | `Agent.ask(q, on_step=...)`, `ask_local(q)` |
 | Budget | `Quota.status()`, `.record()`, `.mark_exhausted()` |
 | Cache | `AnswerCache.key()`, `.get()`, `.put()`, `.stats()`, `.clear()` |
+| CLI | `ask.py "question"`, `--local`, `--json`, `--no-cache` |
 
 Types: `Hit` (key, source, text, score, method, detail) and `Answer`
 (text, model, steps, sources, calls, elapsed, cached). No dicts-of-dicts leaking
@@ -225,13 +226,17 @@ Five surfaces, local mode, quota meter, answer cache, eval harness, smoke tests.
 A named data volume with a restart policy, so a container rebuild or a reboot
 does not cost the corpus.
 
+**v1.2**
+Corpus export/import and a terminal CLI, so a volume loss is recoverable and the
+corpus is scriptable outside the browser.
+
 **Next**
 Local cross-encoder reranking, metadata filters (source, date),
 multi-collection support, a larger labelled question set.
 
 **Later**
 Streaming answers, conversation history persisted in Oracle itself,
-MCP server so other agents can query this corpus, CLI (`ask.py "..."`).
+MCP server so other agents can query this corpus.
 
 ---
 

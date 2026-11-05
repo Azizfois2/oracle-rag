@@ -30,6 +30,20 @@ Then open <http://localhost:8501>.
 
 ---
 
+## Command line
+
+```bat
+%USERPROFILE%\rag-venv\Scripts\python.exe ask.py "Which company raised a Series B?"
+%USERPROFILE%\rag-venv\Scripts\python.exe ask.py --local "hybrid search"
+%USERPROFILE%\rag-venv\Scripts\python.exe ask.py --json "Who partnered with NVIDIA?" > answer.json
+```
+
+`--local` prints the top hybrid hits and spends no quota. `--no-cache` forces a
+fresh model run. The command exits 3 when no model is usable, so a script can
+fall back to local mode.
+
+---
+
 ## Requirements
 
 - Oracle 26ai Free container `oracle-26ai-free` running and healthy (port 1521)
@@ -94,18 +108,22 @@ source of the ten sample articles. It is safe to re-run:
 
 ```
 oracle-rag/
-├─ app.py                 Streamlit UI - no SQL, no prompts
-├─ rag_core.py            the only contract: Oracle, retrieval, agent, quota
-├─ START-GUI.bat          launcher (checks venv, deps, port)
-├─ notebook/              the original lab notebook (canonical copy)
-├─ tools/restore_corpus.py re-ingest the ten samples from the notebook
-├─ quality/questions.json labelled questions + expected source
-├─ quality/run_eval.py    hit@k / MRR harness (CLI + used by the Quality tab)
-├─ tests/smoke_test.py    engine tests, spend zero API quota
-├─ tests/test_app.py      headless render + live search via streamlit.testing
-├─ tests/test_db_down.py  the offline screen starts without a traceback
-├─ data/                  quota.json, model.json, answers.json, eval-last.json (gitignored)
-└─ logs/                  launcher logs (gitignored)
+  app.py                  Streamlit UI - no SQL, no prompts
+  rag_core.py             the only contract: Oracle, retrieval, agent, quota
+  ask.py                  terminal CLI over the same contract
+  START-GUI.bat           launcher (checks venv, deps, port)
+  notebook/               the original lab notebook (canonical copy)
+  tools/restore_corpus.py re-ingest the ten samples from the notebook
+  tools/export_corpus.py  write the corpus to one JSON file
+  tools/import_corpus.py  restore that file, re-embedding the text
+  quality/questions.json  labelled questions + expected source
+  quality/run_eval.py     hit@k / MRR harness (CLI + used by the Quality tab)
+  tests/smoke_test.py     engine tests, spend zero API quota
+  tests/test_app.py       headless render + live search via streamlit.testing
+  tests/test_cli.py       ask.py local mode, no quota
+  tests/test_db_down.py   the offline screen starts without a traceback
+  data/                   quota.json, model.json, answers.json, eval-last.json (gitignored)
+  logs/                   launcher logs (gitignored)
 ```
 
 **Rule:** `app.py` never imports `oracledb` and never builds a prompt. If the UI
@@ -119,13 +137,15 @@ needs data, `rag_core.py` grows a function.
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\smoke_test.py
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\smoke_test.py --llm   REM spends 2-6 API calls
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\test_app.py
+%USERPROFILE%\rag-venv\Scripts\python.exe tests\test_cli.py
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\test_db_down.py
 ```
 
 `smoke_test.py` covers: settings discovery, connect, stats, the three retrieval
-paths, score ranges, ingest → search → delete round-trip, chunking, quota
-bookkeeping. It writes only to a scratch source name and removes it afterwards.
-`--llm` adds one real agent question and is the only test that spends quota.
+paths, score ranges, ingest, export, import, search and delete round-trips,
+chunking, quota bookkeeping. It writes only to a scratch source name and removes
+it afterwards. `--llm` adds one real agent question and is the only test that
+spends quota. `test_cli.py` runs `ask.py` in local mode, so it costs nothing.
 
 ---
 
@@ -184,6 +204,25 @@ memory setting, then this puts the ten sample articles back:
 ```bat
 %USERPROFILE%\rag-venv\Scripts\python.exe tools\restore_corpus.py
 ```
+
+That restores only the ten samples. Anything you ingest yourself needs a backup.
+
+### Backup and restore
+
+```bat
+%USERPROFILE%\rag-venv\Scripts\python.exe tools\export_corpus.py
+```
+
+It writes `data/corpus-<timestamp>.json` with the text and source of every
+chunk. Embeddings are not stored; they are recomputed on import, so the file
+stays small. To restore:
+
+```bat
+%USERPROFILE%\rag-venv\Scripts\python.exe tools\import_corpus.py data\corpus-20261105-120000.json
+```
+
+Existing sources are skipped by default, so importing twice cannot duplicate a
+source. Add `--replace` to overwrite them.
 
 ---
 

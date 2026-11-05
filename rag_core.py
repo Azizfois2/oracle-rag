@@ -809,6 +809,91 @@ class RagEngine:
         finally:
             cur.close()
 
+    def export_corpus(self) -> dict[str, Any]:
+        """Every chunk as plain JSON, so a backup survives the volume.
+
+        Embeddings are not exported. They are recomputed from the text on
+        import, which keeps the file small and portable across embedding models.
+        """
+        self._require_table()
+        cur = self.ensure().cursor()
+        try:
+            cur.execute(
+                f"SELECT JSON_VALUE(metadata, '$.source') AS src, text, metadata "
+                f"FROM {self.s.table} ORDER BY src, id"
+            )
+            rows = cur.fetchall()
+        finally:
+            cur.close()
+
+        documents = []
+        for src, text, meta in rows:
+            metadata = _meta(meta)
+            source = str(src or metadata.get("source") or "unknown")
+            extra = {
+                k: v for k, v in metadata.items()
+                if k not in ("source", "__orcl_internal_doc_id")
+            }
+            documents.append({"source": source, "text": _as_text(text), "metadata": extra})
+        return {
+            "format": "oracle-rag-corpus",
+            "version": 1,
+            "exported_at": dt.datetime.now().isoformat(timespec="seconds"),
+            "table": self.s.table,
+            "embedding_model": self.s.embedding_model,
+            "documents": documents,
+        }
+
+    def import_documents(self, documents: Iterable[dict[str, Any]],
+                         replace: bool = False) -> dict[str, Any]:
+        """Write exported chunks back, re-embedding once per source.
+
+        Existing sources are skipped unless replace=True, so importing the same
+        backup twice cannot silently duplicate a source. Each source is written
+        with one add_documents call, which keeps its chunk boundaries intact.
+        """
+        from langchain_core.documents import Document
+
+        grouped: dict[str, list[Document]] = {}
+        skipped = 0
+        for item in documents:
+            if not isinstance(item, dict):
+                skipped += 1
+                continue
+            source = str(item.get("source") or "unknown").strip()
+            text = str(item.get("text") or "").strip()
+            if not source or not text:
+                skipped += 1
+                continue
+            metadata = item.get("metadata")
+            metadata = dict(metadata) if isinstance(metadata, dict) else {}
+            metadata.pop("__orcl_internal_doc_id", None)
+            metadata["source"] = source
+            grouped.setdefault(source, []).append(Document(page_content=text, metadata=metadata))
+
+        if not grouped:
+            raise RagError("nothing to import: no documents with text and a source")
+
+        added = 0
+        replaced = 0
+        for source, docs in grouped.items():
+            if self.source_exists(source):
+                if not replace:
+                    skipped += len(docs)
+                    continue
+                self.delete_source(source)
+                replaced += 1
+            self.vector_store.add_documents(docs)
+            added += len(docs)
+        self.ensure().commit()
+        self._vec_cache.clear()
+        return {
+            "sources": len(grouped),
+            "chunks": added,
+            "replaced": replaced,
+            "skipped": skipped,
+        }
+
     def corpus_fingerprint(self) -> str | None:
         """Cheap identity of the current corpus, used to key cached answers."""
         try:
