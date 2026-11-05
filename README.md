@@ -17,6 +17,9 @@ START-GUI.bat
 That checks the venv, installs the app dependencies if needed, starts Streamlit on
 port 8501 and opens the browser. The Oracle container must be running.
 
+The container, the `vector` user and the Python environment are created by the
+companion package [`rag-oneclick`](https://github.com/Azizfois2/rag-oneclick).
+
 Manual start:
 
 ```bat
