@@ -2,7 +2,8 @@
 
 A local web app for the Oracle 26ai hybrid-search corpus: **ask questions, compare
 keyword vs vector vs hybrid vs reranked retrieval, manage the corpus, measure
-quality, check the plumbing** - without touching a notebook cell.
+quality, check the plumbing, and expose the corpus to other agents over MCP** -
+without touching a notebook cell.
 
 Vision, principles and roadmap: [`VISION.md`](VISION.md).
 
@@ -41,6 +42,82 @@ Then open <http://localhost:8501>.
 `--local` prints the top hybrid hits and spends no quota. `--no-cache` forces a
 fresh model run. The command exits 3 when no model is usable, so a script can
 fall back to local mode.
+
+---
+
+## MCP server
+
+`mcp_server.py` lets other agents query the corpus over the Model Context
+Protocol. It is **read-only** and **uses no Gemini quota**. The server speaks
+stdio, so it opens no network port.
+
+| Tool | What it does |
+|---|---|
+| `search_corpus` | Retrieve passages. `mode` is `keyword`, `vector`, `hybrid` (default) or `rerank`. `k` is 1-10. |
+| `list_sources` | Every indexed source with its chunk count. |
+| `corpus_info` | Rows, sources, database version, models, indexes and corpus fingerprint. |
+
+Check the server and the database before wiring it into a client:
+
+```bat
+%USERPROFILE%\rag-venv\Scripts\python.exe mcp_server.py --check
+```
+
+That prints corpus information and exits. A normal start looks like:
+
+```bat
+%USERPROFILE%\rag-venv\Scripts\python.exe mcp_server.py
+```
+
+Usually the MCP client starts it for you. The first search loads the local
+embedding model, and `rerank` mode also loads the cross-encoder, so the first
+call can take about a minute. Later calls are fast.
+
+### OpenCode
+
+Add this to `opencode.jsonc` in the project, or to your global OpenCode config.
+Replace `<you>` with your Windows user name:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "oracle-rag": {
+        "type": "local",
+        "command": [
+          "C:\\Users\\<you>\\rag-venv\\Scripts\\python.exe",
+          "C:\\Users\\<you>\\Desktop\\oracle-rag\\mcp_server.py"
+        ],
+        "cwd": "C:\\Users\\<you>\\Desktop\\oracle-rag"
+      }
+    }
+  }
+}
+```
+
+Then run `opencode mcp list` and look for `oracle-rag connected`.
+
+### Claude Desktop
+
+Edit `%APPDATA%\Claude\claude_desktop_config.json`, then restart Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "oracle-rag": {
+      "command": "C:\\Users\\<you>\\rag-venv\\Scripts\\python.exe",
+      "args": [
+        "C:\\Users\\<you>\\Desktop\\oracle-rag\\mcp_server.py"
+      ]
+    }
+  }
+}
+```
+
+Both clients should list `search_corpus`, `list_sources` and `corpus_info`.
+The server only reads the corpus. It has no ingest, delete or ask tool, so an
+agent cannot spend Gemini quota or change your data.
 
 ---
 
@@ -126,6 +203,7 @@ oracle-rag/
   app.py                  Streamlit UI - no SQL, no prompts
   rag_core.py             the only contract: Oracle, retrieval, agent, quota
   ask.py                  terminal CLI over the same contract
+  mcp_server.py           read-only MCP server for other agents (stdio)
   START-GUI.bat           launcher (checks venv, deps, port)
   notebook/               the original lab notebook (canonical copy)
   tools/restore_corpus.py re-ingest the ten samples from the notebook
@@ -137,6 +215,7 @@ oracle-rag/
   tests/smoke_test.py     engine tests, spend zero API quota
   tests/test_app.py       headless render + live search via streamlit.testing
   tests/test_cli.py       ask.py local mode, no quota
+  tests/test_mcp.py       MCP server over real stdio, no quota
   tests/test_db_down.py   the offline screen starts without a traceback
   data/                   quota.json, model.json, answers.json, eval-last.json (gitignored)
   logs/                   launcher logs (gitignored)
@@ -154,6 +233,7 @@ needs data, `rag_core.py` grows a function.
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\smoke_test.py --llm   REM spends 2-6 API calls
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\test_app.py
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\test_cli.py
+%USERPROFILE%\rag-venv\Scripts\python.exe tests\test_mcp.py
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\test_db_down.py
 ```
 
@@ -162,7 +242,8 @@ paths and the local reranker, score ranges, ingest, export, import, search and
 delete round-trips, chunking, quota bookkeeping. It writes only to a scratch
 source name and removes it afterwards. `--llm` adds one real agent question and
 is the only test that spends quota. `test_cli.py` runs `ask.py` in local mode,
-so it costs nothing.
+so it costs nothing. `test_mcp.py` starts the MCP server as a child process and
+calls every tool over stdio, so it also costs nothing.
 
 ---
 
@@ -236,6 +317,8 @@ the same way and are also not confidence.
 | `torch` import error | Venv damaged | Re-run `START-GUI.bat` (it verifies imports) |
 | First rerank query takes about a minute | The cross-encoder is downloaded once | Wait; later queries take about a second |
 | Reranker will not load | First use needs network, or the model name is wrong | Connect once, or point `RAG_RERANK_MODEL` at a cached model |
+| MCP client lists no tools | Wrong Python path, or the server cannot start | Run `mcp_server.py --check`; then use the full path in the client config |
+| First MCP search is slow | The local embedding model loads once | Wait; later searches are fast |
 
 ---
 

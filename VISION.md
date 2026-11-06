@@ -169,10 +169,9 @@ beyond a few seconds.
                 │    rag_core.py   │   ← the only contract
                 └──────────────────┘
                  connect · search · ingest · agent · quota
-                          |
-                    app.py (Streamlit)
-                          |
-              ask · lab · corpus · quality · health
+                  /            |              \
+        app.py (Streamlit)   ask.py      mcp_server.py
+        five UI surfaces     terminal     read-only MCP tools
 ```
 
 `rag_core.py` public surface (stable - the app and tests both use it):
@@ -186,6 +185,7 @@ beyond a few seconds.
 | Agent | `Agent.ask(q, on_step=...)`, `ask_local(q)` |
 | Budget | `Quota.status()`, `.record()`, `.mark_exhausted()` |
 | Cache | `AnswerCache.key()`, `.get()`, `.put()`, `.stats()`, `.clear()` |
+| MCP | `mcp_server.py`: `search_corpus`, `list_sources`, `corpus_info` (read-only, stdio) |
 | CLI | `ask.py "question"`, `--local`, `--json`, `--no-cache` |
 
 Types: `Hit` (key, source, text, score, method, detail) and `Answer`
@@ -250,13 +250,17 @@ reranking of the hybrid candidates. Judged against the v1.3 benchmark: reranking
 lifts all-answerable MRR from 0.68 to 0.87 and puts every single-document answer
 at rank 1. The reranker runs on the CPU, so it costs no API quota.
 
+**v1.5**
+A read-only MCP server over stdio: `search_corpus`, `list_sources` and
+`corpus_info`. Other agents can query the corpus without a Gemini key or the
+Streamlit UI. No write tools, no network listener, no quota.
+
 **Next**
 Metadata filters (source, date), a larger and more varied labelled set,
 multi-collection support.
 
 **Later**
-Streaming answers, conversation history persisted in Oracle itself,
-MCP server so other agents can query this corpus.
+Streaming answers, conversation history persisted in Oracle itself.
 
 ---
 
@@ -269,6 +273,7 @@ MCP server so other agents can query this corpus.
 - [x] Ingest → search → delete round-trip works without dropping the table.
 - [x] Quota is counted, persisted, and visible; exhausted models are skipped.
 - [x] Agent answers carry a trace with sources and call count.
+- [x] An MCP client can list three tools and search the corpus over stdio.
 - [x] `python tests/smoke_test.py` passes without spending API quota.
 - [x] No secret in git history; `.env` and `data/` ignored.
 - [x] A colleague can go from clone to browser in under two minutes if the venv exists.
@@ -292,3 +297,4 @@ MCP server so other agents can query this corpus.
 | **Re-chunk the ten articles instead of fetching more** | The benchmark is labelled against this text. Unrelated articles could produce false-positive hits and contaminate the ground truth. Re-chunking keeps the facts identical and changes only retrieval granularity, while making k = 5 a real test (5 of 46). |
 | **Local cross-encoder, not an API reranker** | Zero quota, no extra key, and about a second per query on CPU. Retrieval still belongs to Oracle; the reranker only reorders the hybrid pool. |
 | **Stable keyword benchmark** | Oracle Text score ties and index-level statistics made repeated runs disagree (cross hit@5 moved between 0.25 and 0.50). `ORDER BY kw DESC, id` removes tie drift; the Quality run rebuilds the text index first, which changes no data. |
+| **Read-only MCP tools, not an LLM-backed ask** | Retrieval is the reusable capability. An `ask` tool would spend quota, hide the retrieval step, and duplicate the app's agent. The server exposes search and corpus metadata only, over stdio, with no network listener. |
