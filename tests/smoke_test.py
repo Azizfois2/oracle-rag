@@ -81,6 +81,16 @@ def main() -> int:
     check("every expected string exists in the sample corpus", not missing,
           str(missing[:3]))
 
+    chunked = [part for doc in sample
+               for part in rc.chunk_text(doc.page_content, 900, 120)]
+    chunk_haystack = "\n".join(chunked).lower()
+    missing_chunks = [needle for item, kind in zip(questions, kinds)
+                      if kind != "unanswerable"
+                      for needle in needles_for(item)
+                      if needle.lower() not in chunk_haystack]
+    check("default chunking preserves every expected string", not missing_chunks,
+          str(missing_chunks[:3]))
+
     hits = [
         rc.Hit("a", "doc_a.md", "Alpha evidence", 0.9, "vector"),
         rc.Hit("b", "doc_b.md", "Beta evidence", 0.8, "vector"),
@@ -94,8 +104,8 @@ def main() -> int:
     check("_rank with no needles is None", _rank(hits, []) is None)
 
     ranked = [
-        {"keyword": 1, "vector": 2, "hybrid": None},
-        {"keyword": 10, "vector": None, "hybrid": 4},
+        {"keyword": 1, "vector": 2, "hybrid": None, "rerank": 1},
+        {"keyword": 10, "vector": None, "hybrid": 4, "rerank": 3},
     ]
     block = _block(ranked, k=5)
     check("_block counts keyword hits inside k",
@@ -106,6 +116,9 @@ def main() -> int:
           str(block["hybrid"]))
     check("_block excludes misses from MRR",
           block["vector"]["mrr"] == 0.25, str(block["vector"]))
+    check("_block scores the rerank path",
+          block["rerank"]["hit"] == 1.0 and block["rerank"]["found"] == 2,
+          str(block["rerank"]))
     check("question_type infers cross from expect_all",
           question_type({"expect_all": ["A", "B"]}) == "cross")
     check("question_type infers unanswerable from an empty expect",
@@ -158,12 +171,24 @@ def main() -> int:
           all({"vector", "keyword"} <= set(h.detail) for h in hyb) if hyb else False,
           json.dumps(hyb[0].detail) if hyb else "")
 
-    bundle = engine.search_all("Which companies are putting money into hybrid search?", k=5, weight=0.6)
-    check("bundle has three paths", bool(bundle.keyword) and bool(bundle.vector) and bool(bundle.hybrid))
+    bundle = engine.search_all("Which companies are putting money into hybrid search?", k=5,
+                               weight=0.6, rerank=True)
+    check("bundle has four paths",
+          bool(bundle.keyword) and bool(bundle.vector)
+          and bool(bundle.hybrid) and bool(bundle.rerank))
+    check("reranked hits use the reranker",
+          all(h.method == "rerank" for h in bundle.rerank))
+    check("rerank keeps the raw cross-encoder score",
+          all("cross_encoder" in h.detail for h in bundle.rerank),
+          json.dumps(bundle.rerank[0].detail) if bundle.rerank else "")
     check("timings recorded and sane",
           all(0 <= v < 20000 for v in bundle.timings.values()),
           ", ".join(f"{k} {v:.0f} ms" for k, v in bundle.timings.items()))
     check("consensus computed", isinstance(bundle.consensus(), list), f"{len(bundle.consensus())} docs in >=2 paths")
+
+    plain = engine.search_all("Which companies are putting money into hybrid search?", k=5)
+    check("rerank is opt-in and off by default",
+          plain.rerank == [] and "rerank" not in plain.timings)
 
     # the weight slider must actually change the ranking
     zero = engine.hybrid_search("hybrid search", k=5, weight=0.0)
@@ -203,6 +228,8 @@ def main() -> int:
           f"{len(scratch_chunks)} chunks")
     check("export stores text, not embeddings",
           all("embedding" not in d for d in exported["documents"]))
+    check("export is plain JSON",
+          bool(json.dumps(exported, ensure_ascii=False)))
     check("export records the embedding model", bool(exported.get("embedding_model")),
           str(exported.get("embedding_model")))
 

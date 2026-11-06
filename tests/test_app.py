@@ -60,9 +60,15 @@ def main() -> int:
         bundle = at.session_state.get("bundle")
         check("bundle stored in session", bundle is not None)
         if bundle is not None:
-            check("three paths returned", bool(bundle.keyword) and bool(bundle.vector) and bool(bundle.hybrid),
-                  f"kw {len(bundle.keyword)} vec {len(bundle.vector)} hyb {len(bundle.hybrid)}")
-            check("timings present", set(bundle.timings) == {"keyword", "vector", "hybrid"},
+            check("four paths returned",
+                  bool(bundle.keyword) and bool(bundle.vector)
+                  and bool(bundle.hybrid) and bool(bundle.rerank),
+                  f"kw {len(bundle.keyword)} vec {len(bundle.vector)} "
+                  f"hyb {len(bundle.hybrid)} rer {len(bundle.rerank)}")
+            check("reranked hits come from the reranker",
+                  all(h.method == "rerank" for h in bundle.rerank))
+            check("timings present",
+                  set(bundle.timings) == {"keyword", "vector", "hybrid", "rerank"},
                   str({k: round(v, 1) for k, v in bundle.timings.items()}))
         body = markdown_text(at)
         check("result rows rendered", 'class="row"' in body)
@@ -88,30 +94,35 @@ def main() -> int:
         result = at.session_state.get("eval")
         check("evaluation stored in session", isinstance(result, dict), type(result).__name__)
         if isinstance(result, dict):
-            check("evaluation is schema 2", result.get("version") == 2,
+            check("evaluation is schema 3", result.get("version") == 3,
                   str(result.get("version")))
             check("evaluation covers 40 questions",
                   result.get("question_count") == 40, str(result.get("question_count")))
             check("evaluation has 40 rows", len(result.get("rows") or []) == 40)
-            check("evaluation keeps all three paths",
-                  set(result.get("summary") or {}) == {"keyword", "vector", "hybrid"})
+            check("evaluation keeps all four paths",
+                  set(result.get("summary") or {}) == {"keyword", "vector", "hybrid", "rerank"})
             check("evaluation splits by question type",
                   set(result.get("by_type") or {}) == {"single", "cross"})
             check("evaluation has unanswerable stats",
-                  set(result.get("unanswerable") or {}) == {"keyword", "vector", "hybrid"})
+                  set(result.get("unanswerable") or {}) == {"keyword", "vector", "hybrid", "rerank"})
             check("evaluation has answerable top scores",
-                  set(result.get("answerable_tops") or {}) == {"keyword", "vector", "hybrid"})
+                  set(result.get("answerable_tops") or {}) == {"keyword", "vector", "hybrid", "rerank"})
             check("evaluation records the question hash", bool(result.get("questions_hash")))
+            check("evaluation records the corpus fingerprint",
+                  bool(result.get("corpus_fingerprint")))
+            check("evaluation records the corpus size",
+                  int(result.get("corpus_rows") or 0) >= 10,
+                  str(result.get("corpus_rows")))
 
         frames = [frame.value for frame in at.dataframe]
         summary = next((f for f in frames
                         if {"path", "hit@k", "MRR", "found"} <= set(f.columns)
                         and "set" not in f.columns), None)
-        check("summary table rendered", summary is not None and len(summary) == 3,
+        check("summary table rendered", summary is not None and len(summary) == 4,
               "none" if summary is None else str(len(summary)))
         breakdown = next((f for f in frames
                           if {"set", "path", "hit@k", "MRR"} <= set(f.columns)), None)
-        check("type breakdown rendered", breakdown is not None and len(breakdown) == 6,
+        check("type breakdown rendered", breakdown is not None and len(breakdown) == 8,
               "none" if breakdown is None else str(len(breakdown)))
         comparison = next((f for f in frames
                            if {"set", "mean top", "min top"} <= set(f.columns)), None)
@@ -126,14 +137,19 @@ def main() -> int:
         if per_question is not None:
             check("per-question marks unanswerable rows",
                   int((per_question["set"] == "unanswerable").sum()) == 8)
+            check("per-question includes the rerank column",
+                  "rerank" in per_question.columns)
             check("per-question shows ranks for answerable rows",
                   any(str(value).startswith("#") for value in per_question["hybrid"]))
+            check("per-question shows rerank ranks",
+                  any(str(value).startswith("#") for value in per_question["rerank"]))
 
         stale = dict(result) if isinstance(result, dict) else {}
         stale["questions_hash"] = "stale"
+        stale["corpus_fingerprint"] = "stale"
         at.session_state["eval"] = stale
         at.run()
-        check("stale evaluation is rejected", "question set changed" in alert_text(at))
+        check("stale evaluation is rejected", "changed since this run" in alert_text(at))
 
     at.segmented_control[0].set_value("Health").run()
     health = markdown_text(at)

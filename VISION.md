@@ -93,16 +93,17 @@ can tell where it came from.
 *Failure:* it answers without searching - the trace makes that obvious immediately.
 
 ### Search Lab - *the proof*
-One query, three retrieval paths, one screen.
-- Three columns: keyword (Oracle Text), vector (HNSW), hybrid (weighted fusion).
+One query, four retrieval paths, one screen.
+- Four columns: keyword (Oracle Text), vector (HNSW), hybrid (weighted fusion),
+  and reranked (local cross-encoder over the hybrid candidates).
 - Each hit: rank, source, score bar, snippet, and badges showing which *other*
   paths found it too.
 - A weight slider that moves fusion from keyword-only to vector-only, live.
 - Per-path latency in milliseconds.
-- A consensus line: how many documents all three methods agree on.
+- A consensus line: how many documents the four methods agree on.
 
-*Success:* you can answer "is hybrid actually better here?" by looking.
-*Failure:* the three columns return identical results - which is itself a finding.
+*Success:* you can answer "is reranking actually better here?" by looking.
+*Failure:* the four columns return identical results - which is itself a finding.
 
 ### Corpus - *the control*
 - Document and chunk counts, average chunk size, table size, index status.
@@ -116,15 +117,17 @@ One query, three retrieval paths, one screen.
 silently duplicated.
 
 ### Quality - *the honesty*
-A 40-question labelled set, run against all three paths.
+A 40-question labelled set, run against all four paths.
 - 24 single-document, 8 cross-document, 8 unanswerable.
 - Cross-document hits require every expected string in the top k.
 - hit@k and MRR per method, plus a single-versus-cross breakdown.
 - Unanswerable questions are not scored as hits. Their vector top score is
-  compared with answerable questions; keyword scores are normalised per query,
-  so they are not a confidence measure.
-- Results saved to `data/eval-last.json` so runs are comparable over time, and a
-  changed question file invalidates the stored run.
+  compared with answerable questions; keyword and reranked scores are normalised
+  per query, so they are not a confidence measure.
+- Results saved to `data/eval-last.json` so runs are comparable over time. A
+  changed question file **or corpus fingerprint** invalidates the stored run.
+- Each run rebuilds the Oracle Text index first, so keyword scores do not depend
+  on what was ingested or deleted earlier.
 
 *Success:* changing a parameter has a number attached to it.
 *Failure:* a question nobody can retrieve - visible, not swept away.
@@ -144,8 +147,9 @@ beyond a few seconds.
 **A query console, not a chatbot skin.**
 
 - Graphite ground, one brand accent (Oracle red `#C74634`), everything else quiet.
-- **Colour carries meaning:** amber = keyword, blue = vector, green = hybrid.
-  The same three colours appear in the lab, the trace and the eval table.
+- **Colour carries meaning:** amber = keyword, blue = vector, green = hybrid,
+  purple = reranked. The same four colours appear in the lab, the trace and the
+  eval table.
 - Numbers live in monospace. Prose stays in a clean sans. Scores align right.
 - Density over decoration: this is a tool for reading results, not a landing page.
 - Cards, not boxes-in-boxes. One border, one accent stripe, generous line-height.
@@ -177,7 +181,7 @@ beyond a few seconds.
 |---|---|
 | Config | `Settings.from_env()`, `Settings.models()` |
 | Connection | `RagEngine.connect()`, `.ensure()`, `.stats()` |
-| Retrieval | `.keyword_search(q,k)`, `.vector_search(q,k)`, `.hybrid_search(q,k,w)`, `.search_all(q,k,w)` |
+| Retrieval | `.keyword_search(q,k)`, `.vector_search(q,k)`, `.hybrid_search(q,k,w)`, `.rerank_hits(q,hits,k)`, `.reranked_search(q,k,w)`, `.search_all(q,k,w,rerank=)` |
 | Corpus | `.sources()`, `.ingest(text, source)`, `.delete_source(s)`, `.reindex()`, `.export_corpus()`, `.import_documents(docs, replace=)` |
 | Agent | `Agent.ask(q, on_step=...)`, `ask_local(q)` |
 | Budget | `Quota.status()`, `.record()`, `.mark_exhausted()` |
@@ -217,7 +221,7 @@ into the UI.
 | Free Gemini: ~20 requests/day **per model**, 2–6 per question | Quota meter, local mode, no probe calls, model fallback, answer cache |
 | Database must survive a rebuilt container | Named volume `oracle-26ai-data` plus `--restart unless-stopped`; the README says what deleting the volume destroys |
 | Windows, one machine, Python 3.11 venv | No Docker/Node build step; `.bat` launcher next to the existing one |
-| 8–16 GB RAM, CPU only | 384-dim MiniLM embeddings; no GPU assumptions; no torch re-download |
+| 8–16 GB RAM, CPU only | 384-dim MiniLM embeddings; a small MiniLM cross-encoder reranks at most 30 candidates; no GPU assumptions; no torch re-download |
 | Beginner user | Every error message ends with the literal next action |
 
 ---
@@ -240,9 +244,15 @@ A 40-question benchmark: 24 single-document, 8 cross-document, 8 unanswerable.
 Cross-document hits require every expected string in the top k. Unanswerable
 questions are compared with answerable ones instead of being scored as hits.
 
+**v1.4**
+A 46-chunk corpus re-split from the same ten articles, plus local cross-encoder
+reranking of the hybrid candidates. Judged against the v1.3 benchmark: reranking
+lifts all-answerable MRR from 0.68 to 0.87 and puts every single-document answer
+at rank 1. The reranker runs on the CPU, so it costs no API quota.
+
 **Next**
-Local cross-encoder reranking judged against the 40-question baseline, metadata
-filters (source, date), multi-collection support.
+Metadata filters (source, date), a larger and more varied labelled set,
+multi-collection support.
 
 **Later**
 Streaming answers, conversation history persisted in Oracle itself,
@@ -279,3 +289,6 @@ MCP server so other agents can query this corpus.
 | **Local mode is first-class** | The free tier cannot be the only way in. A demo that dies at 20 requests/day is not a demo. |
 | **Keep Gemini's native SDK** | The OpenAI-compatible endpoint drops thought signatures and breaks the ReAct loop on the second turn. Already proven the hard way. |
 | **Notebook moved into `notebook/`** | So the whole project - lab and product - is versioned in one repository. |
+| **Re-chunk the ten articles instead of fetching more** | The benchmark is labelled against this text. Unrelated articles could produce false-positive hits and contaminate the ground truth. Re-chunking keeps the facts identical and changes only retrieval granularity, while making k = 5 a real test (5 of 46). |
+| **Local cross-encoder, not an API reranker** | Zero quota, no extra key, and about a second per query on CPU. Retrieval still belongs to Oracle; the reranker only reorders the hybrid pool. |
+| **Stable keyword benchmark** | Oracle Text score ties and index-level statistics made repeated runs disagree (cross hit@5 moved between 0.25 and 0.50). `ORDER BY kw DESC, id` removes tie drift; the Quality run rebuilds the text index first, which changes no data. |

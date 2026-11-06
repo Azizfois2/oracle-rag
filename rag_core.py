@@ -27,6 +27,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
@@ -38,6 +39,7 @@ ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L12-v2"
+RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 TABLE = "TECH_NEWS_COLLECTION"
 HNSW_INDEX = "TECH_NEWS_HNSW_IDX"
 TEXT_INDEX = "TECH_NEWS_TEXT_IDX"
@@ -119,6 +121,7 @@ class Settings:
     dsn: str = "localhost:1521/FREEPDB1"
     table: str = TABLE
     embedding_model: str = EMBEDDING_MODEL
+    rerank_model: str = RERANK_MODEL
     gemini_key: str | None = None
     gemini_model: str | None = None
     openai_key: str | None = None
@@ -145,6 +148,7 @@ class Settings:
             dsn=os.getenv("ORACLE_DSN", "localhost:1521/FREEPDB1"),
             table=os.getenv("RAG_TABLE", TABLE),
             embedding_model=os.getenv("RAG_EMBEDDING_MODEL", EMBEDDING_MODEL),
+            rerank_model=os.getenv("RAG_RERANK_MODEL", RERANK_MODEL),
             gemini_key=key or None,
             gemini_model=pinned or None,
             openai_key=(os.getenv("OPENAI_API_KEY") or "").strip() or None,
@@ -169,6 +173,7 @@ class Settings:
             "user": self.user,
             "table": self.table,
             "embedding_model": self.embedding_model,
+            "rerank_model": self.rerank_model,
             "env_file": str(self.env_path) if self.env_path else None,
             "gemini_key": bool(self.gemini_key),
             "gemini_key_hint": (
@@ -213,12 +218,14 @@ class SearchBundle:
     vector: list[Hit]
     hybrid: list[Hit]
     timings: dict[str, float]
+    rerank: list[Hit] = field(default_factory=list)
 
     def all_keys(self) -> dict[str, set[str]]:
         return {
             "keyword": {h.key for h in self.keyword},
             "vector": {h.key for h in self.vector},
             "hybrid": {h.key for h in self.hybrid},
+            "rerank": {h.key for h in self.rerank},
         }
 
     def consensus(self) -> list[str]:
@@ -297,6 +304,22 @@ def _meta(value: Any) -> dict[str, Any]:
         except Exception:
             return {}
     return {}
+
+
+def _jsonable(value: Any) -> Any:
+    """Turn Oracle JSON values into plain JSON values.
+
+    Oracle returns JSON numbers as ``Decimal``, which ``json.dumps`` refuses.
+    Exporting the corpus must stay plain JSON so a backup can be written to
+    disk without a custom encoder.
+    """
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    return value
 
 
 def _source(value: Any) -> str:
@@ -646,15 +669,17 @@ class AnswerCache:
 # engine
 # --------------------------------------------------------------------------- #
 class RagEngine:
-    """One connection, one embedding model, three retrieval paths."""
+    """One connection, one embedding model, three paths plus an optional reranker."""
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.s = settings or Settings.from_env()
         self._conn: oracledb.Connection | None = None
         self._vs: Any = None
         self._emb: Any = None
+        self._ce: Any = None
         self._vec_cache: dict[str, array.array] = {}
         self._emb_lock = threading.Lock()
+        self._ce_lock = threading.Lock()
 
     # -- lifecycle ----------------------------------------------------------
     def connect(self) -> oracledb.Connection:
@@ -696,6 +721,59 @@ class RagEngine:
 
                     self._emb = HuggingFaceEmbeddings(model_name=self.s.embedding_model)
         return self._emb
+
+    @property
+    def reranker(self) -> Any:
+        """The local cross-encoder. It is loaded on first use, never at import."""
+        if self._ce is None:
+            with self._ce_lock:
+                if self._ce is None:
+                    try:
+                        from sentence_transformers import CrossEncoder
+
+                        self._ce = CrossEncoder(self.s.rerank_model)
+                    except Exception as exc:
+                        raise RagError(f"reranker unavailable: {_first_line(exc)}") from exc
+        return self._ce
+
+    def warm_reranker(self) -> None:
+        _ = self.reranker
+
+    def rerank_hits(self, query: str, hits: list[Hit], k: int = 5) -> list[Hit]:
+        """Reorder hybrid candidates with a local cross-encoder.
+
+        The score is min-max normalised over this candidate pool so the score
+        bar stays readable; the raw logit is kept in ``detail``. This is a
+        local model, so it costs no API quota.
+        """
+        candidates = list(hits)
+        if not candidates:
+            return []
+        raw = [float(score) for score in self.reranker.predict(
+            [(query, hit.text) for hit in candidates], show_progress_bar=False)]
+        low, high = min(raw), max(raw)
+        span = high - low
+        ranked: list[Hit] = []
+        for hit, score in zip(candidates, raw):
+            shown = 1.0 if span < 1e-9 else (score - low) / span
+            ranked.append(
+                Hit(
+                    key=hit.key,
+                    source=hit.source,
+                    text=hit.text,
+                    score=round(shown, 4),
+                    method="rerank",
+                    detail={"hybrid": hit.score, "cross_encoder": round(score, 4)},
+                )
+            )
+        ranked.sort(key=lambda h: (-h.score, h.key))
+        return ranked[:k]
+
+    def reranked_search(self, query: str, k: int = 5, weight: float = 0.6) -> list[Hit]:
+        """Hybrid retrieval over a wider pool, then cross-encoder reranking."""
+        self._require_table()
+        pool = self.hybrid_search(query, max(k * 6, 30), weight)
+        return self.rerank_hits(query, pool, k)
 
     @property
     def vector_store(self) -> Any:
@@ -834,7 +912,8 @@ class RagEngine:
                 k: v for k, v in metadata.items()
                 if k not in ("source", "__orcl_internal_doc_id")
             }
-            documents.append({"source": source, "text": _as_text(text), "metadata": extra})
+            documents.append({"source": source, "text": _as_text(text),
+                              "metadata": _jsonable(extra)})
         return {
             "format": "oracle-rag-corpus",
             "version": 1,
@@ -965,7 +1044,7 @@ class RagEngine:
                     SELECT id, text, metadata, SCORE(1) AS kw
                     FROM {self.s.table}
                     WHERE CONTAINS(text, :expr, 1) > 0
-                    ORDER BY kw DESC
+                    ORDER BY kw DESC, id
                     FETCH FIRST {int(pool)} ROWS ONLY
                     """,
                     {"expr": expr},
@@ -996,7 +1075,7 @@ class RagEngine:
                 cur.execute(
                     f"SELECT id, text, metadata FROM {self.s.table} "
                     "WHERE DBMS_LOB.INSTR(UPPER(text), :w) > 0 "
-                    f"FETCH FIRST {int(pool)} ROWS ONLY",
+                    f"ORDER BY id FETCH FIRST {int(pool)} ROWS ONLY",
                     {"w": term.upper()},
                 )
             except oracledb.Error:
@@ -1072,7 +1151,8 @@ class RagEngine:
         if self._emb is None:
             threading.Thread(target=self.warm, name="embed-warm", daemon=True).start()
 
-    def search_all(self, query: str, k: int = 5, weight: float = 0.6) -> SearchBundle:
+    def search_all(self, query: str, k: int = 5, weight: float = 0.6,
+                   rerank: bool = False) -> SearchBundle:
         self._require_table()
         _ = self.embeddings          # never charge model loading to a search's latency
         self._query_vector(query)    # embed once; the three paths share the vector
@@ -1090,7 +1170,16 @@ class RagEngine:
         hybrid = self.hybrid_search(query, k, weight)
         timings["hybrid"] = (time.perf_counter() - start) * 1000
 
-        return SearchBundle(query=query, keyword=keyword, vector=vector, hybrid=hybrid, timings=timings)
+        reranked: list[Hit] = []
+        if rerank:
+            _ = self.reranker        # load once, outside the timed rerank stage
+            start = time.perf_counter()
+            candidates = self.hybrid_search(query, max(k * 6, 30), weight)
+            reranked = self.rerank_hits(query, candidates, k)
+            timings["rerank"] = (time.perf_counter() - start) * 1000
+
+        return SearchBundle(query=query, keyword=keyword, vector=vector,
+                            hybrid=hybrid, timings=timings, rerank=reranked)
 
     # -- corpus -------------------------------------------------------------
     def source_exists(self, source: str) -> bool:
@@ -1142,6 +1231,25 @@ class RagEngine:
             conn.commit()
             self._vec_cache.clear()
             return removed
+        finally:
+            cur.close()
+
+    def rebuild_text_index(self) -> None:
+        """Rebuild the Oracle Text index so keyword scores have a clean start.
+
+        Oracle Text scoring uses index-level statistics. Inserts and deletes
+        change those statistics, so two runs over the same rows can rank keyword
+        hits differently. The benchmark rebuilds first; no data is changed.
+        """
+        self._require_table()
+        if not any(i["name"].upper() == TEXT_INDEX.upper() for i in self.indexes()):
+            self.reindex()
+            return
+        conn = self.ensure()
+        cur = conn.cursor()
+        try:
+            cur.execute(f"ALTER INDEX {TEXT_INDEX} REBUILD")
+            conn.commit()
         finally:
             cur.close()
 

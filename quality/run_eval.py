@@ -10,8 +10,10 @@ A cross-document question needs every string in expect_all, possibly in
 different chunks. Unanswerable questions are not scored as hits: retrieval
 always returns k chunks, so the run compares their vector top score with
 answerable questions. Keyword scores are normalised per query and always peak
-at 1.0, so they are not a confidence measure. No LLM is involved, so a full run
-costs zero quota.
+at 1.0, so they are not a confidence measure. A fourth path reranks the hybrid
+candidates with a local cross-encoder. No LLM or API is involved, so a full run
+costs zero quota. Each run rebuilds the Oracle Text index first, so keyword
+scores do not depend on what was ingested or deleted earlier.
 """
 
 from __future__ import annotations
@@ -28,11 +30,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import rag_core as rc
 
-METHODS = ("keyword", "vector", "hybrid")
+METHODS = ("keyword", "vector", "hybrid", "rerank")
 TYPES = ("single", "cross", "unanswerable")
 QUESTIONS = Path(__file__).with_name("questions.json")
 LAST_RUN = rc.DATA_DIR / "eval-last.json"
-VERSION = 2
+VERSION = 3
 
 
 def load_questions(path: Path | None = None) -> list[dict[str, str]]:
@@ -122,13 +124,21 @@ def evaluate(engine: rc.RagEngine, questions: list[dict] | None = None,
              k: int = 5, weight: float = 0.6) -> dict:
     questions = questions or load_questions()
     engine.warm()
+    index_started = time.perf_counter()
+    engine.rebuild_text_index()
+    index_rebuild = time.perf_counter() - index_started
+    load_started = time.perf_counter()
+    engine.warm_reranker()
+    rerank_load = time.perf_counter() - load_started
+    fingerprint = engine.corpus_fingerprint()
+    corpus_rows = engine.stats().get("rows", 0)
 
     rows = []
     started = time.perf_counter()
     for item in questions:
         kind = question_type(item)
         needles = needles_for(item)
-        bundle = engine.search_all(item["question"], k=k, weight=weight)
+        bundle = engine.search_all(item["question"], k=k, weight=weight, rerank=True)
         row: dict[str, object] = {
             "question": item["question"],
             "expect": item.get("expect"),
@@ -160,10 +170,14 @@ def evaluate(engine: rc.RagEngine, questions: list[dict] | None = None,
         "version": VERSION,
         "question_count": len(questions),
         "questions_hash": questions_digest(questions),
+        "corpus_fingerprint": fingerprint,
+        "corpus_rows": corpus_rows,
         "at": dt.datetime.now().isoformat(timespec="seconds"),
         "k": k,
         "weight": round(weight, 2),
         "elapsed": round(time.perf_counter() - started, 1),
+        "index_rebuild": round(index_rebuild, 1),
+        "rerank_load": round(rerank_load, 1),
         "rows": rows,
         "summary": summary,
         "by_type": by_type,
@@ -205,8 +219,8 @@ def main() -> int:
     result = evaluate(engine, k=args.k, weight=args.weight)
     save_run(result)
 
-    print(f"\n{'question':<56} {'set':<6} {'kw':>4} {'vec':>4} {'hyb':>4}")
-    print("-" * 82)
+    print(f"\n{'question':<56} {'set':<6} {'kw':>4} {'vec':>4} {'hyb':>4} {'rer':>4}")
+    print("-" * 88)
     for row in result["rows"]:
         def cell(value: object) -> str:
             if row["type"] == "unanswerable":
@@ -214,9 +228,9 @@ def main() -> int:
             return "-" if value is None else f"#{value}"
         kind = {"single": "one", "cross": "cross", "unanswerable": "none"}[row["type"]]
         print(f"{row['question'][:54]:<56} {kind:<6} {cell(row['keyword']):>4} "
-              f"{cell(row['vector']):>4} {cell(row['hybrid']):>4}")
+              f"{cell(row['vector']):>4} {cell(row['hybrid']):>4} {cell(row['rerank']):>4}")
 
-    print("-" * 82)
+    print("-" * 88)
     blocks = [("all answerable", result["summary"])]
     blocks += [(kind, block) for kind, block in result["by_type"].items()]
     for label, block in blocks:

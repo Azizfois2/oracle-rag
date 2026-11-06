@@ -26,13 +26,16 @@ from quality.run_eval import (evaluate, load_last, load_questions, question_type
 # --------------------------------------------------------------------------- #
 # constants
 # --------------------------------------------------------------------------- #
-METHODS = ("keyword", "vector", "hybrid")
-LABEL = {"keyword": "Keyword", "vector": "Vector", "hybrid": "Hybrid"}
+METHODS = ("keyword", "vector", "hybrid", "rerank")
+LABEL = {"keyword": "Keyword", "vector": "Vector", "hybrid": "Hybrid",
+         "rerank": "Reranked"}
 NOTE = {
     "keyword": "Oracle Text · CONTAINS",
     "vector": "HNSW · cosine",
     "hybrid": "weighted fusion",
+    "rerank": "local cross-encoder",
 }
+METHOD_CLASS = {"keyword": "kw", "vector": "vec", "hybrid": "hyb", "rerank": "rer"}
 GLYPH = {"search": "search", "sources": "read", "answer": "write", "note": "note"}
 LAB_SQL = """-- keyword: Oracle Text, ranked by its own score
 SELECT id, text, metadata, SCORE(1) AS kw
@@ -48,7 +51,10 @@ SELECT id, text, metadata, 1 - VECTOR_DISTANCE(embedding, :q, COSINE) AS sim
  FETCH APPROX FIRST 20 ROWS ONLY;
 
 -- hybrid: computed in rag_core.hybrid_search
---   score = w * sim + (1 - w) * normalized_keyword_score"""
+--   score = w * sim + (1 - w) * normalized_keyword_score
+
+-- rerank: local cross-encoder over the top hybrid candidates
+--   shown score is min-max normalised within that candidate pool"""
 
 CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
@@ -56,7 +62,7 @@ CSS = """
 :root{
   --ink:#1B1816; --ink2:#6B615A; --ink3:#948A82;
   --line:#E4DBD4; --panel:#F3EDE8; --paper:#FAF7F4;
-  --accent:#B23A2B; --kw:#8A5A0B; --vec:#20609C; --hyb:#1E6E48;
+  --accent:#B23A2B; --kw:#8A5A0B; --vec:#20609C; --hyb:#1E6E48; --rer:#6B4B8A;
 }
 
 html, body, .stApp, [data-testid="stMarkdownContainer"], [data-testid="stWidgetLabel"]{
@@ -86,6 +92,7 @@ p, li{ font-size:.89rem; line-height:1.6; }
 .small{ font-size:.77rem; color:var(--ink2); line-height:1.55; }
 .mono{ font-family:"IBM Plex Mono",ui-monospace,Consolas,monospace; font-variant-numeric:tabular-nums; }
 .kw-t{ color:var(--kw); } .vec-t{ color:var(--vec); } .hyb-t{ color:var(--hyb); }
+.rer-t{ color:var(--rer); }
 
 button[data-baseweb="tab"]{ font-size:.82rem; font-weight:500; color:var(--ink2); }
 button[data-baseweb="tab"][aria-selected="true"]{ color:var(--ink); }
@@ -114,6 +121,7 @@ div[data-baseweb="tab-border"]{ background:var(--line); }
   padding:.04rem .3rem; border-radius:2px; }
 
 i.kw{ background:var(--kw); } i.vec{ background:var(--vec); } i.hyb{ background:var(--hyb); }
+i.rer{ background:var(--rer); }
 
 .panel{ border:1px solid var(--line); background:#FFFDFB; padding:.7rem .85rem; border-radius:3px; }
 .panel .k{ font-family:"IBM Plex Mono",monospace; font-size:.62rem; letter-spacing:.11em;
@@ -165,6 +173,7 @@ def esc(value: object) -> str:
 
 def row_html(rank: int, hit: rc.Hit, method: str, tags: tuple[str, ...] = ()) -> str:
     width = max(2, min(100, round(hit.score * 100)))
+    css = METHOD_CLASS[method]
     tags_block = ""
     if tags:
         inner = "".join(f'<span class="tag">{esc(t)}</span>' for t in tags)
@@ -172,11 +181,11 @@ def row_html(rank: int, hit: rc.Hit, method: str, tags: tuple[str, ...] = ()) ->
     return (
         f'<div class="row">'
         f'<div class="row-top">'
-        f'<span class="rank {method}-t">{rank}</span>'
+        f'<span class="rank {css}-t">{rank}</span>'
         f'<span class="src">{esc(hit.source)}</span>'
-        f'<span class="score {method}-t">{hit.score:.3f}</span>'
+        f'<span class="score {css}-t">{hit.score:.3f}</span>'
         f"</div>"
-        f'<div class="track"><i class="{method}"></i></div>'
+        f'<div class="track"><i class="{css}"></i></div>'
         f'<div class="snip">{esc(hit.snippet(190))}</div>'
         f"{tags_block}"
         f"</div>"
@@ -185,7 +194,7 @@ def row_html(rank: int, hit: rc.Hit, method: str, tags: tuple[str, ...] = ()) ->
 
 def lab_head(method: str, ms: float, count: int) -> str:
     return (
-        f'<div class="lab-head"><div class="name"><i class="{method}"></i>{LABEL[method]}</div>'
+        f'<div class="lab-head"><div class="name"><i class="{METHOD_CLASS[method]}"></i>{LABEL[method]}</div>'
         f'<div class="lat">{count} hits · {ms:.0f} ms</div></div>'
     )
 
@@ -434,10 +443,10 @@ def tab_lab(engine: rc.RagEngine) -> None:
 
     if submitted and query.strip():
         st.session_state.lab_query = query.strip()
-        with st.spinner("Querying keyword, vector and hybrid"):
+        with st.spinner("Querying keyword, vector, hybrid and the reranker"):
             try:
                 st.session_state.bundle = engine.search_all(
-                    query.strip(), k=int(k), weight=float(weight))
+                    query.strip(), k=int(k), weight=float(weight), rerank=True)
                 st.session_state.bundle_at = time.strftime("%H:%M:%S")
             except rc.RagError as exc:
                 st.error(str(exc))
@@ -446,8 +455,8 @@ def tab_lab(engine: rc.RagEngine) -> None:
     bundle = st.session_state.get("bundle")
     if bundle is None:
         st.markdown(
-            '<p class="small">One query, three retrieval paths, side by side. '
-            "The same scores the app uses everywhere else.</p>",
+            '<p class="small">One query, four retrieval paths, side by side. '
+            "The reranker is a local model, so it costs no API quota.</p>",
             unsafe_allow_html=True,
         )
         return
@@ -456,13 +465,14 @@ def tab_lab(engine: rc.RagEngine) -> None:
     shared = bundle.consensus()
     st.markdown(
         f'<p class="small"><span class="mono">{esc(bundle.query)}</span> · '
-        f'{bundle.total} documents across the three paths · '
+        f'{bundle.total} documents across the four paths · '
         f'{len(shared)} found by at least two · '
-        f'fusion took <span class="mono">{bundle.timings["hybrid"]:.0f} ms</span></p>',
+        f'fusion took <span class="mono">{bundle.timings["hybrid"]:.0f} ms</span> · '
+        f'rerank took <span class="mono">{bundle.timings["rerank"]:.0f} ms</span></p>',
         unsafe_allow_html=True,
     )
 
-    columns = st.columns(3, gap="large")
+    columns = st.columns(4, gap="large")
     for column, method in zip(columns, METHODS):
         hits = getattr(bundle, method)
         with column:
@@ -485,7 +495,9 @@ def tab_lab(engine: rc.RagEngine) -> None:
         st.markdown(
             '<p class="small">Keyword scores are normalised against the best match in the '
             "same pool. Vector scores are cosine similarity. Hybrid is a weighted sum of "
-            "both, so a document found by only one path can still rank.</p>",
+            "both, so a document found by only one path can still rank. Reranked takes the "
+            "top hybrid candidates and scores each one with a local cross-encoder; its "
+            "displayed score is normalised within that candidate pool.</p>",
             unsafe_allow_html=True,
         )
         st.code(LAB_SQL, language="sql")
@@ -626,7 +638,8 @@ def tab_quality(engine: rc.RagEngine) -> None:
         "appears in the retrieved chunk or its source. Cross-document hits need "
         "every expected string in the top k. Unanswerable questions are not "
         "scored as hits; their vector similarity is compared with answerable "
-        "questions. No model is called, so a full run costs nothing.</p>",
+        "questions. Reranked is a local cross-encoder. No LLM or API is called, "
+        "so a full run costs no quota.</p>",
         unsafe_allow_html=True,
     )
 
@@ -635,7 +648,7 @@ def tab_quality(engine: rc.RagEngine) -> None:
     weight = middle.slider("Hybrid weight", 0.0, 1.0, 0.6, 0.05, key="eval_w")
     right.markdown("<div style='height:1.55rem'></div>", unsafe_allow_html=True)
     if right.button("Run evaluation", type="primary"):
-        with st.spinner("Retrieving all questions through all paths"):
+        with st.spinner("Rebuilding the keyword index, loading the reranker if needed, then retrieving all questions"):
             try:
                 result = evaluate(engine, questions, k=int(k), weight=float(weight))
                 save_run(result)
@@ -645,9 +658,11 @@ def tab_quality(engine: rc.RagEngine) -> None:
                 return
 
     result = st.session_state.get("eval") or load_last()
-    if result and (result.get("version") != 2
-                   or result.get("questions_hash") != questions_digest(questions)):
-        st.info("The labelled question set changed since this run. "
+    current = engine.corpus_fingerprint()
+    if result and (result.get("version") != 3
+                   or result.get("questions_hash") != questions_digest(questions)
+                   or result.get("corpus_fingerprint") != current):
+        st.info("The question set or corpus changed since this run. "
                 "Press Run evaluation to refresh it.")
         return
     if not result:
@@ -669,9 +684,13 @@ def tab_quality(engine: rc.RagEngine) -> None:
         for m in METHODS
     ])
     st.dataframe(summary, hide_index=True, column_config=progress)
+    rerank_load = float(result.get("rerank_load") or 0.0)
+    index_rebuild = float(result.get("index_rebuild") or 0.0)
     st.markdown(
         f'<p class="small">k = {result["k"]} · hybrid weight {result["weight"]} · '
-        f'{result["elapsed"]}s · run at {result["at"].replace("T", " ")} · '
+        f'{result["elapsed"]}s · {result.get("corpus_rows", "?")} chunks · '
+        f'keyword index {index_rebuild:.1f}s · reranker load {rerank_load:.1f}s · '
+        f'run at {result["at"].replace("T", " ")} · '
         f'{result["question_count"]} questions</p>',
         unsafe_allow_html=True,
     )
@@ -748,6 +767,7 @@ def tab_quality(engine: rc.RagEngine) -> None:
             "keyword": cell("keyword"),
             "vector": cell("vector"),
             "hybrid": cell("hybrid"),
+            "rerank": cell("rerank"),
             "top cosine": f'{float(row.get("vector_top", 0.0)):.2f}',
             "expected": expected,
         })
