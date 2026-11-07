@@ -81,11 +81,14 @@ This is the product's reason to exist. Everything else is supporting cast.
 
 ### Ask - *the product*
 Chat with the ReAct agent over the corpus.
-- Streams step-level progress (searching → reading → writing), not a dead spinner.
+- Streams the answer text token by token, with step-level progress (searching →
+  reading → writing) above it, not a dead spinner.
 - Every answer carries a trace: tool calls, the exact queries sent, sources with
   relevance, model used, API calls spent, wall-clock time.
 - **Local mode** toggle: hybrid retrieval with no LLM at all. Zero quota, still
   useful, and the honest fallback when the free tier is empty.
+- Discussions are saved in Oracle and restored on open. The sidebar lists recent
+  threads, searches their text, and puts deletion behind a confirmation.
 - Empty state teaches: four example questions, one click each.
 
 *Success:* a non-technical person gets a sourced answer in under 30 seconds and
@@ -134,7 +137,8 @@ A 40-question labelled set, run against all four paths.
 
 ### Health - *the plumbing*
 Database version, container state, table/index status, embedding model,
-API key presence (never the value), and the per-model quota table with reset time.
+API key presence (never the value), the per-model quota table with reset time,
+and discussion history counts with a clear-all action.
 
 *Success:* "why is it broken?" is answered on one screen.
 *Failure:* the page lies about state - so every value is read live, never cached
@@ -168,7 +172,7 @@ beyond a few seconds.
                 ┌──────────────────┐
                 │    rag_core.py   │   ← the only contract
                 └──────────────────┘
-                 connect · search · ingest · agent · quota
+                 connect · search · ingest · agent · quota · history
                   /            |              \
         app.py (Streamlit)   ask.py      mcp_server.py
         five UI surfaces     terminal     read-only MCP tools
@@ -182,9 +186,10 @@ beyond a few seconds.
 | Connection | `RagEngine.connect()`, `.ensure()`, `.stats()` |
 | Retrieval | `.keyword_search(q,k)`, `.vector_search(q,k)`, `.hybrid_search(q,k,w)`, `.rerank_hits(q,hits,k)`, `.reranked_search(q,k,w)`, `.search_all(q,k,w,rerank=)` |
 | Corpus | `.sources()`, `.ingest(text, source)`, `.delete_source(s)`, `.reindex()`, `.export_corpus()`, `.import_documents(docs, replace=)` |
-| Agent | `Agent.ask(q, on_step=...)`, `ask_local(q)` |
+| Agent | `Agent.ask(q, on_step=, on_token=, on_reset=)`, `ask_local(q)` |
 | Budget | `Quota.status()`, `.record()`, `.mark_exhausted()` |
 | Cache | `AnswerCache.key()`, `.get()`, `.put()`, `.stats()`, `.clear()` |
+| History | `ChatHistory.list()`, `.search()`, `.messages()`, `.append()`, `.rename()`, `.delete()`, `.clear()` |
 | MCP | `mcp_server.py`: `search_corpus`, `list_sources`, `corpus_info` (read-only, stdio) |
 | CLI | `ask.py "question"`, `--local`, `--json`, `--no-cache` |
 
@@ -197,6 +202,8 @@ into the UI.
 ## 8. Data and privacy
 
 - Documents, embeddings and indexes never leave the machine.
+- Discussion history (questions, answers, traces) is stored in the local Oracle
+  database, not in a browser profile or a cloud service.
 - Only the question and the retrieved passages go to Gemini.
 - Prompts may be used by Google to improve products on the free tier - so the
   corpus is synthetic sample news, and the README says so plainly.
@@ -255,12 +262,25 @@ A read-only MCP server over stdio: `search_corpus`, `list_sources` and
 `corpus_info`. Other agents can query the corpus without a Gemini key or the
 Streamlit UI. No write tools, no network listener, no quota.
 
+**v1.6**
+Discussion history persisted in Oracle. One table, one row per message. The
+sidebar lists recent threads, reopening the app returns to the latest one, and
+each answer rebuilds its trace, sources and retrieval hits. History is separate
+from the corpus, costs no quota, and is never dropped automatically.
+
+**v1.7**
+Answers stream token by token into the page, with the trace still filling in
+above. The sidebar searches saved discussions by text, one result per thread,
+with the latest matching message as the snippet. Streaming adds an optional
+callbacks pair to `Agent.ask`; the cache, sources and model fallback are
+unchanged.
+
 **Next**
 Metadata filters (source, date), a larger and more varied labelled set,
 multi-collection support.
 
 **Later**
-Streaming answers, conversation history persisted in Oracle itself.
+Follow-up questions that use the current discussion as context.
 
 ---
 
@@ -273,6 +293,9 @@ Streaming answers, conversation history persisted in Oracle itself.
 - [x] Ingest → search → delete round-trip works without dropping the table.
 - [x] Quota is counted, persisted, and visible; exhausted models are skipped.
 - [x] Agent answers carry a trace with sources and call count.
+- [x] A remote answer streams in token by token and still ends with the full trace.
+- [x] A discussion survives a Streamlit restart, with its trace and sources.
+- [x] A word from a saved discussion finds that thread from the sidebar.
 - [x] An MCP client can list three tools and search the corpus over stdio.
 - [x] `python tests/smoke_test.py` passes without spending API quota.
 - [x] No secret in git history; `.env` and `data/` ignored.
@@ -298,3 +321,6 @@ Streaming answers, conversation history persisted in Oracle itself.
 | **Local cross-encoder, not an API reranker** | Zero quota, no extra key, and about a second per query on CPU. Retrieval still belongs to Oracle; the reranker only reorders the hybrid pool. |
 | **Stable keyword benchmark** | Oracle Text score ties and index-level statistics made repeated runs disagree (cross hit@5 moved between 0.25 and 0.50). `ORDER BY kw DESC, id` removes tie drift; the Quality run rebuilds the text index first, which changes no data. |
 | **Read-only MCP tools, not an LLM-backed ask** | Retrieval is the reusable capability. An `ask` tool would spend quota, hide the retrieval step, and duplicate the app's agent. The server exposes search and corpus metadata only, over stdio, with no network listener. |
+| **Discussions in Oracle, not browser storage or a JSON file** | The corpus already lives in Oracle, so history survives a browser reset and a machine restart, needs no second backup file, and can be queried with SQL. Browser storage is fragile, and a JSON file would be one more source of truth. The table is created on first use and never dropped automatically. |
+| **Substring search over history, not full-text indexing** | A second Oracle Text index would complicate setup for a table that holds one person's chats. A case-insensitive substring match is predictable, needs no index maintenance, and stays fast at this size. Wildcards are escaped so `%` means the character, not "anything". |
+| **Token callbacks on `Agent.ask`, not a second agent** | `on_token` and `on_reset` are optional, so the CLI, the MCP server and every test keep the same call. Streaming reuses the same graph and the same quota counter; only the event mode changes. The final `Answer` still arrives whole and is what gets cached and saved. |

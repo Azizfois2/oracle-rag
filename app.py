@@ -6,10 +6,12 @@ that touches Oracle or Gemini lives in rag_core.py.
 
 from __future__ import annotations
 
+import datetime as dt
 import html
 import json
 import os
 import time
+import uuid
 from pathlib import Path
 
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
@@ -156,12 +158,13 @@ hr{ border-color:var(--line); }
 # boot
 # --------------------------------------------------------------------------- #
 @st.cache_resource(show_spinner=False)
-def boot() -> tuple[rc.Settings, rc.RagEngine, rc.Agent]:
+def boot() -> tuple[rc.Settings, rc.RagEngine, rc.Agent, rc.ChatHistory]:
     settings = rc.Settings.from_env()
     engine = rc.RagEngine(settings)
     agent = rc.Agent(engine, settings)
+    history = rc.ChatHistory(engine)
     engine.warm_async()
-    return settings, engine, agent
+    return settings, engine, agent, history
 
 
 # --------------------------------------------------------------------------- #
@@ -207,11 +210,77 @@ def dot(state: str) -> str:
     return {"ok": "ok", "warn": "warn"}.get(state, "bad")
 
 
+def short_label(text: object, limit: int = 30) -> str:
+    clean = " ".join(str(text or "").split())
+    if len(clean) <= limit:
+        return clean or "Untitled discussion"
+    return clean[: limit - 3].rstrip() + "..."
+
+
+def when(value: object) -> str:
+    try:
+        stamp = dt.datetime.fromisoformat(str(value))
+    except Exception:
+        return ""
+    now = dt.datetime.now().astimezone()
+    if stamp.date() == now.date():
+        return stamp.strftime("%H:%M")
+    if stamp.year == now.year:
+        return stamp.strftime("%b %d")
+    return stamp.strftime("%b %d, %Y")
+
+
+def fresh_chat() -> None:
+    st.session_state.chat_id = uuid.uuid4().hex
+    st.session_state.chat = []
+    st.session_state.pending = None
+    st.session_state.pop("confirm_delete", None)
+
+
+def clear_history_search() -> None:
+    st.session_state.history_search = ""
+
+
+def open_chat(history: rc.ChatHistory, chat_id: str) -> None:
+    try:
+        messages = history.messages(chat_id)
+    except rc.RagError as exc:
+        st.session_state.history_flash = f"Could not open that discussion: {exc}"
+        return
+    st.session_state.chat_id = chat_id
+    st.session_state.chat = messages
+    st.session_state.pop("confirm_delete", None)
+
+
+def init_chat(history: rc.ChatHistory) -> None:
+    """On a fresh session, reopen the most recent discussion."""
+    if "chat_id" in st.session_state:
+        return
+    try:
+        chats = history.list(limit=1)
+        if chats:
+            st.session_state.chat_id = chats[0]["id"]
+            st.session_state.chat = history.messages(chats[0]["id"])
+        else:
+            fresh_chat()
+    except rc.RagError as exc:
+        fresh_chat()
+        st.session_state.history_flash = f"History is unavailable: {exc}"
+
+
+def save_message(history: rc.ChatHistory, role: str, content: str,
+                 answer: rc.Answer | None = None) -> None:
+    try:
+        history.append(st.session_state.get("chat_id"), role, content, answer=answer)
+    except rc.RagError as exc:
+        st.session_state.history_flash = f"This discussion was not saved: {exc}"
+
+
 # --------------------------------------------------------------------------- #
 # sidebar
 # --------------------------------------------------------------------------- #
 def render_sidebar(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
-                   stats: dict, db: dict) -> None:
+                   history: rc.ChatHistory, stats: dict, db: dict) -> None:
     quota = agent.quota
     models = settings.models()
     status = quota.status()
@@ -224,6 +293,9 @@ def render_sidebar(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
             '<div class="side-sub">26ai · local</div>',
             unsafe_allow_html=True,
         )
+        flash = st.session_state.pop("history_flash", None)
+        if flash:
+            st.markdown(f'<p class="small">{esc(flash)}</p>', unsafe_allow_html=True)
         st.markdown("<div style='height:.9rem'></div>", unsafe_allow_html=True)
 
         db_state = "ok" if db.get("ok") else "bad"
@@ -251,6 +323,76 @@ def render_sidebar(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
                         'Add <span class="mono">GEMINI_API_KEY</span> to '
                         f'<span class="mono">{esc(settings.env_path or ".env")}</span>.</p>',
                         unsafe_allow_html=True)
+
+        st.divider()
+        st.markdown('<div class="k mono" style="font-size:.62rem;letter-spacing:.11em;'
+                    'text-transform:uppercase;color:var(--ink3)">discussions</div>',
+                    unsafe_allow_html=True)
+        if st.button("New discussion", key="new_chat", use_container_width=True):
+            fresh_chat()
+            st.rerun()
+
+        find = st.text_input("Find in discussions", key="history_search",
+                             placeholder="words from a past chat")
+        query = " ".join((find or "").split())
+        if query:
+            st.button("Clear search", key="clear_history_search",
+                      on_click=clear_history_search, use_container_width=True)
+        try:
+            chats = history.search(query, limit=4) if query else history.list(limit=6)
+        except rc.RagError as exc:
+            chats = []
+            st.markdown(f'<p class="small">{esc(exc)}</p>', unsafe_allow_html=True)
+        if not chats:
+            message = ("No discussion matches those words." if query
+                       else "No saved discussions yet.")
+            st.markdown(f'<p class="small">{message}</p>', unsafe_allow_html=True)
+        for item in chats:
+            active = item["id"] == st.session_state.get("chat_id")
+            help_text = (f'{item.get("matches", 0)} matching messages · '
+                         f'{item.get("snippet", "")}'
+                         if query else
+                         f'{item["messages"]} messages · {when(item["updated"])}')
+            if st.button(
+                short_label(item["title"]),
+                key=f'chat_{item["id"]}',
+                help=help_text,
+                use_container_width=True,
+                type="primary" if active else "secondary",
+            ):
+                open_chat(history, item["id"])
+                st.rerun()
+
+        if st.session_state.get("chat_id"):
+            with st.expander("Manage this discussion"):
+                if st.session_state.get("confirm_delete") == st.session_state.get("chat_id"):
+                    st.markdown('<p class="small">Delete this discussion and all of its '
+                                'messages?</p>', unsafe_allow_html=True)
+                    if st.button("Yes, delete", key="delete_yes", type="primary",
+                                 use_container_width=True):
+                        try:
+                            removed = history.delete(st.session_state.chat_id)
+                        except rc.RagError as exc:
+                            st.session_state.history_flash = str(exc)
+                        else:
+                            st.session_state.history_flash = f"Deleted {removed} messages."
+                            try:
+                                remaining = history.list(limit=1)
+                            except rc.RagError:
+                                remaining = []
+                            if remaining:
+                                open_chat(history, remaining[0]["id"])
+                            else:
+                                fresh_chat()
+                        st.session_state.pop("confirm_delete", None)
+                        st.rerun()
+                    if st.button("Cancel", key="delete_no", use_container_width=True):
+                        st.session_state.pop("confirm_delete", None)
+                        st.rerun()
+                elif st.button("Delete this discussion", key="delete_chat",
+                               use_container_width=True):
+                    st.session_state.confirm_delete = st.session_state.chat_id
+                    st.rerun()
 
         st.divider()
         pct = min(1.0, spent / budget) if budget else 0.0
@@ -303,7 +445,7 @@ SUGGESTIONS = (
 )
 
 
-def render_answer_body(answer: rc.Answer) -> None:
+def render_answer_body(answer: rc.Answer, show_text: bool = True) -> None:
     if answer.local:
         st.markdown('<p class="small">Retrieval only. No model was called.</p>',
                     unsafe_allow_html=True)
@@ -313,7 +455,8 @@ def render_answer_body(answer: rc.Answer) -> None:
         for index, hit in enumerate(answer.hits, start=1):
             st.markdown(row_html(index, hit, "hybrid"), unsafe_allow_html=True)
     else:
-        st.markdown(answer.text)
+        if show_text:
+            st.markdown(answer.text)
         if answer.cached:
             st.markdown(
                 '<p class="small">Cached: the same question against the same corpus, '
@@ -351,8 +494,10 @@ def render_answer_body(answer: rc.Answer) -> None:
             )
 
 
-def answer_flow(question: str, settings: rc.Settings, agent: rc.Agent) -> None:
+def answer_flow(question: str, settings: rc.Settings, agent: rc.Agent,
+                history: rc.ChatHistory) -> None:
     st.session_state.chat.append({"role": "user", "content": question})
+    save_message(history, "user", question)
     with st.chat_message("user"):
         st.markdown(question)
 
@@ -362,31 +507,66 @@ def answer_flow(question: str, settings: rc.Settings, agent: rc.Agent) -> None:
             "Reading the corpus" if local else "Searching the corpus",
             expanded=True,
         )
+        stream_box = st.empty()
+        chunks: list[str] = []
+        writing = {"on": False}
 
         def on_step(kind: str, text: str) -> None:
             status.write(f"`{GLYPH.get(kind, kind)}` {text}")
 
+        def on_reset() -> None:
+            chunks.clear()
+            writing["on"] = False
+            stream_box.empty()
+            status.update(label="Searching the corpus", state="running",
+                          expanded=True)
+
+        def on_token(text: str) -> None:
+            if not text:
+                return
+            if not writing["on"]:
+                writing["on"] = True
+                status.update(label="Writing the answer", state="running",
+                              expanded=False)
+            chunks.append(text)
+            stream_box.markdown("".join(chunks) + "▌")
+
         try:
-            answer = (agent.ask_local(question) if local
-                      else agent.ask(question, on_step=on_step))
+            if local:
+                answer = agent.ask_local(question)
+            else:
+                answer = agent.ask(question, on_step=on_step,
+                                   on_token=on_token, on_reset=on_reset)
             status.update(label=f"Answered in {answer.elapsed:.1f}s",
                           state="complete", expanded=False)
         except rc.QuotaExhausted as exc:
+            stream_box.empty()
             status.update(label="Quota exhausted", state="error", expanded=False)
             st.warning(f"{exc}. Switch on Local mode in the sidebar to keep working.")
             st.session_state.chat.append({"role": "error", "content": str(exc)})
+            save_message(history, "error", str(exc))
             return
         except rc.RagError as exc:
+            stream_box.empty()
             status.update(label="Failed", state="error", expanded=False)
             st.error(str(exc))
             st.session_state.chat.append({"role": "error", "content": str(exc)})
+            save_message(history, "error", str(exc))
             return
 
-        render_answer_body(answer)
+        if not local:
+            stream_box.markdown(answer.text)
+        render_answer_body(answer, show_text=local)
     st.session_state.chat.append({"role": "assistant", "answer": answer})
+    save_message(history, "assistant", answer.text, answer=answer)
 
 
-def tab_ask(settings: rc.Settings, agent: rc.Agent, stats: dict) -> None:
+def tab_ask(settings: rc.Settings, agent: rc.Agent, history: rc.ChatHistory,
+            stats: dict) -> None:
+    flash = st.session_state.pop("history_flash", None)
+    if flash:
+        st.warning(flash)
+
     chat = st.session_state.chat
     if not chat and not st.session_state.get("pending"):
         st.markdown(
@@ -401,6 +581,10 @@ def tab_ask(settings: rc.Settings, agent: rc.Agent, stats: dict) -> None:
             if columns[index % 2].button(suggestion, key=f"sug{index}"):
                 st.session_state.pending = suggestion
                 st.rerun()
+    elif chat:
+        st.markdown('<p class="small">This discussion is saved in Oracle. '
+                    'Pick another one in the sidebar, or start a new one.</p>',
+                    unsafe_allow_html=True)
 
     for item in chat:
         if item["role"] == "user":
@@ -415,11 +599,11 @@ def tab_ask(settings: rc.Settings, agent: rc.Agent, stats: dict) -> None:
 
     queued = st.session_state.pop("pending", None)
     if queued:
-        answer_flow(queued, settings, agent)
+        answer_flow(queued, settings, agent, history)
 
     prompt = st.chat_input("Ask about the corpus")
     if prompt:
-        answer_flow(prompt, settings, agent)
+        answer_flow(prompt, settings, agent, history)
 
 
 # --------------------------------------------------------------------------- #
@@ -779,7 +963,7 @@ def tab_quality(engine: rc.RagEngine) -> None:
 # health
 # --------------------------------------------------------------------------- #
 def tab_health(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
-               stats: dict, db: dict) -> None:
+               history: rc.ChatHistory, stats: dict, db: dict) -> None:
     flash = st.session_state.pop("cache_flash", None)
     if flash:
         st.success(flash)
@@ -869,6 +1053,40 @@ def tab_health(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
             removed = agent.cache.clear()
             st.session_state.cache_flash = f"Cleared {removed} cached answers."
             st.rerun()
+
+        st.markdown('<h3 style="margin-top:1.1rem">Discussion history</h3>',
+                    unsafe_allow_html=True)
+        try:
+            history_info = history.stats()
+        except rc.RagError as exc:
+            st.markdown(f'<p class="small">{esc(exc)}</p>', unsafe_allow_html=True)
+        else:
+            st.markdown(
+                f'<div class="kv"><span>discussions</span><b>{history_info["chats"]}</b></div>'
+                f'<div class="kv"><span>messages</span><b>{history_info["messages"]}</b></div>'
+                f'<div class="kv"><span>table</span><b>{esc(history_info["table"])}</b></div>',
+                unsafe_allow_html=True,
+            )
+            if st.session_state.get("confirm_clear_history"):
+                st.warning("This deletes every saved discussion. The corpus is not touched.")
+                yes, no = st.columns(2)
+                if yes.button("Delete all", key="clear_history_yes", type="primary",
+                              use_container_width=True):
+                    try:
+                        removed = history.clear()
+                    except rc.RagError as exc:
+                        st.session_state.history_flash = str(exc)
+                    else:
+                        st.session_state.history_flash = f"Deleted {removed} messages."
+                        fresh_chat()
+                    st.session_state.pop("confirm_clear_history", None)
+                    st.rerun()
+                if no.button("Cancel", key="clear_history_no", use_container_width=True):
+                    st.session_state.pop("confirm_clear_history", None)
+                    st.rerun()
+            elif st.button("Clear all discussions", key="clear_history"):
+                st.session_state.confirm_clear_history = True
+                st.rerun()
 
         st.markdown('<h3 style="margin-top:1.1rem">Corpus backup</h3>', unsafe_allow_html=True)
         backup = st.session_state.get("backup")
@@ -976,8 +1194,7 @@ def main() -> None:
     )
     st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
 
-    settings, engine, agent = boot()
-    st.session_state.setdefault("chat", [])
+    settings, engine, agent, history = boot()
     st.session_state.setdefault("local_mode", not settings.has_llm)
     st.session_state.setdefault("bundle", None)
 
@@ -986,8 +1203,9 @@ def main() -> None:
         render_db_down(db, settings)
         st.stop()
 
+    init_chat(history)
     stats = engine.stats()
-    render_sidebar(settings, engine, agent, stats, db)
+    render_sidebar(settings, engine, agent, history, stats, db)
 
     st.markdown(
         f'<div class="appbar"><div><div class="eyebrow">Oracle 26ai · local</div>'
@@ -1011,7 +1229,7 @@ def main() -> None:
     st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
 
     if page == "Ask":
-        tab_ask(settings, agent, stats)
+        tab_ask(settings, agent, history, stats)
     elif page == "Search lab":
         tab_lab(engine)
     elif page == "Corpus":
@@ -1019,7 +1237,7 @@ def main() -> None:
     elif page == "Quality":
         tab_quality(engine)
     else:
-        tab_health(settings, engine, agent, stats, db)
+        tab_health(settings, engine, agent, history, stats, db)
 
 
 main()

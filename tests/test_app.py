@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import rag_core as rc  # noqa: E402
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
 failures: list[str] = []
@@ -181,6 +182,64 @@ def main() -> int:
     downloads = [d for d in at.download_button if d.key == "download_backup"]
     check("download button offered",
           len(downloads) == 1 and "Download backup" in str(downloads[0].label))
+
+    print("\n== discussion history ==")
+    at.segmented_control[0].set_value("Ask").run()
+    body = markdown_text(at)
+    check("sidebar names the discussions section", "discussions" in body)
+    new_buttons = [b for b in at.button if b.key == "new_chat"]
+    check("sidebar offers a new discussion", bool(new_buttons))
+
+    history = rc.ChatHistory(rc.RagEngine(rc.Settings.from_env()))
+    chat_id = ""
+    try:
+        if new_buttons:
+            new_buttons[0].click().run()
+            chat_id = str(at.session_state.get("chat_id") or "")
+            check("new discussion gets an id", bool(chat_id), chat_id)
+            check("new discussion starts empty", not at.session_state.get("chat"))
+            at.session_state["local_mode"] = True
+            if at.chat_input:
+                at.chat_input[0].set_value(
+                    "Which company raised an $85M Series B?").run()
+                check("local question renders", not at.exception, str(at.exception))
+                saved = history.messages(chat_id)
+                check("question is saved in Oracle",
+                      len(saved) >= 1 and saved[0]["role"] == "user")
+                check("local answer is saved in Oracle",
+                      len(saved) >= 2 and saved[1]["role"] == "assistant")
+                listed = history.list(limit=50)
+                check("discussion appears in the sidebar",
+                      any(item["id"] == chat_id for item in listed))
+
+                finder = [t for t in at.text_input if t.key == "history_search"]
+                check("sidebar offers discussion search", bool(finder))
+                if finder:
+                    finder[0].set_value("Series B").run()
+                    check("discussion search renders", not at.exception,
+                          str(at.exception))
+                    check("matching discussion stays selectable",
+                          any(b.key == f"chat_{chat_id}" for b in at.button))
+                    check("search offers a clear action",
+                          any(b.key == "clear_history_search" for b in at.button))
+
+                second = AppTest.from_file(str(ROOT / "app.py"), default_timeout=240)
+                second.run()
+                check("reopening restores the latest discussion",
+                      second.session_state.get("chat_id") == chat_id,
+                      str(second.session_state.get("chat_id")))
+                restored = second.session_state.get("chat") or []
+                check("restored discussion keeps its messages",
+                      len(restored) >= 2 and restored[0]["role"] == "user")
+                if restored and restored[0]["role"] == "user":
+                    check("restored question matches",
+                          "Series B" in restored[0]["content"])
+            else:
+                check("chat input is available", False)
+    finally:
+        if chat_id:
+            history.delete(chat_id)
+        history.e.close()
 
     print("\n" + "-" * 60)
     if failures:

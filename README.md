@@ -2,8 +2,8 @@
 
 A local web app for the Oracle 26ai hybrid-search corpus: **ask questions, compare
 keyword vs vector vs hybrid vs reranked retrieval, manage the corpus, measure
-quality, check the plumbing, and expose the corpus to other agents over MCP** -
-without touching a notebook cell.
+quality, check the plumbing, expose the corpus to other agents over MCP, and keep
+your discussions in Oracle** - without touching a notebook cell.
 
 Vision, principles and roadmap: [`VISION.md`](VISION.md).
 
@@ -121,6 +121,38 @@ agent cannot spend Gemini quota or change your data.
 
 ---
 
+## Discussion history
+
+Every question and answer is saved in the Oracle table `RAG_CHAT_LOG`, one row
+per message. Closing the browser, restarting Streamlit or rebooting the machine
+does not lose the discussion. The sidebar lists the six most recent, and opening
+the app again returns to the latest one.
+
+- **New discussion** starts a clean thread.
+- Click a title to reopen it. The answer text, trace, sources and retrieval hits
+  all come back.
+- **Find in discussions** searches the saved questions, answers and error text.
+  Matching is case-insensitive, one result per discussion, and the tooltip shows
+  the latest matching message. Typed `%` and `_` are treated as ordinary text.
+- **Manage this discussion -> Delete** removes that thread after a confirmation.
+- Health shows the discussion and message counts and can clear all of them.
+
+History uses no Gemini quota and stays in your local database. Clearing it does
+not touch the corpus, the evaluation or the answer cache. The table is created
+automatically on first use.
+
+## Streaming answers
+
+Remote answers are written into the page token by token, so the text starts to
+appear as the model produces it. The trace keeps filling in above, then collapses
+to the elapsed time when the answer is done. A cursor marks the text while it is
+still arriving, and the final message replaces it with the normal formatted
+answer. Sources, the trace, the answer cache and model fallback behave exactly as
+before. Local mode is unchanged: it shows ranked hits, with no model and no
+quota.
+
+---
+
 ## Requirements
 
 - Oracle 26ai Free container `oracle-26ai-free` running and healthy (port 1521)
@@ -188,11 +220,11 @@ is no longer comparable: run Quality again.
 
 | Surface | What it is for |
 |---|---|
-| **Ask** | ReAct agent over the corpus, with a trace: tool calls, queries, sources, API calls, latency. Local mode = no LLM, zero quota. A repeated question is served from cache with no call at all. |
+| **Ask** | ReAct agent over the corpus, with the answer streaming in and a trace: tool calls, queries, sources, API calls, latency. Local mode = no LLM, zero quota. A repeated question is served from cache with no call at all. Discussions are saved in Oracle, restored on open, and searchable from the sidebar. |
 | **Search lab** | The same query through keyword, vector, hybrid and the local reranker at once - scores, snippets, overlap. The proof that each step earns its keep. |
 | **Corpus** | Source list, chunk counts, ingest text/files, delete a source, rebuild indexes. |
 | **Quality** | 40 labelled questions (single, cross-document, unanswerable) → hit@k and MRR per retrieval path, including the reranker, saved per run. |
-| **Health** | Database version, container state, indexes, embedding model, key presence, per-model quota with reset time, answer cache, corpus backup. |
+| **Health** | Database version, container state, indexes, embedding model, key presence, per-model quota with reset time, answer cache, discussion history, corpus backup. |
 
 ---
 
@@ -201,7 +233,7 @@ is no longer comparable: run Quality again.
 ```
 oracle-rag/
   app.py                  Streamlit UI - no SQL, no prompts
-  rag_core.py             the only contract: Oracle, retrieval, agent, quota
+  rag_core.py             the only contract: Oracle, retrieval, agent, history
   ask.py                  terminal CLI over the same contract
   mcp_server.py           read-only MCP server for other agents (stdio)
   START-GUI.bat           launcher (checks venv, deps, port)
@@ -216,6 +248,7 @@ oracle-rag/
   tests/test_app.py       headless render + live search via streamlit.testing
   tests/test_cli.py       ask.py local mode, no quota
   tests/test_mcp.py       MCP server over real stdio, no quota
+  tests/test_history.py   discussions persist and rebuild, scratch table only
   tests/test_db_down.py   the offline screen starts without a traceback
   data/                   quota.json, model.json, answers.json, eval-last.json (gitignored)
   logs/                   launcher logs (gitignored)
@@ -234,16 +267,22 @@ needs data, `rag_core.py` grows a function.
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\test_app.py
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\test_cli.py
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\test_mcp.py
+%USERPROFILE%\rag-venv\Scripts\python.exe tests\test_history.py
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\test_db_down.py
 ```
 
 `smoke_test.py` covers: settings discovery, connect, stats, the four retrieval
 paths and the local reranker, score ranges, ingest, export, import, search and
-delete round-trips, chunking, quota bookkeeping. It writes only to a scratch
-source name and removes it afterwards. `--llm` adds one real agent question and
-is the only test that spends quota. `test_cli.py` runs `ask.py` in local mode,
-so it costs nothing. `test_mcp.py` starts the MCP server as a child process and
-calls every tool over stdio, so it also costs nothing.
+delete round-trips, chunking, quota bookkeeping, and the streaming contract with
+a fake graph. It writes only to a scratch source name and removes it afterwards.
+`--llm` adds one real agent question and is the only test that spends quota.
+`test_cli.py` runs `ask.py` in local mode, so it costs nothing. `test_mcp.py`
+starts the MCP server as a child process and calls every tool over stdio, so it
+also costs nothing. `test_history.py` uses the scratch table
+`RAG_CHAT_LOG_TEST`, checks persistence and search, and drops it, so your real
+discussions are never touched. `test_app.py` also asks one local question,
+searches for it from the sidebar, reopens the app in a second session, checks
+that the discussion came back, and deletes that test thread.
 
 ---
 
@@ -319,6 +358,7 @@ the same way and are also not confidence.
 | Reranker will not load | First use needs network, or the model name is wrong | Connect once, or point `RAG_RERANK_MODEL` at a cached model |
 | MCP client lists no tools | Wrong Python path, or the server cannot start | Run `mcp_server.py --check`; then use the full path in the client config |
 | First MCP search is slow | The local embedding model loads once | Wait; later searches are fast |
+| Discussions do not appear | The history table could not be created | Use the `vector` user, which owns the corpus table, and keep the database reachable |
 
 ---
 
@@ -330,7 +370,10 @@ it comes back with Docker. Stopping, restarting or even removing the container
 keeps that volume; deleting the volume itself is what destroys the data.
 
 The app never drops tables on its own - deleting a source removes only that
-source's rows, behind a confirmation.
+source's rows, behind a confirmation. Discussion history lives in the same
+volume, in `RAG_CHAT_LOG`. It is separate from the corpus backup: restoring the
+corpus does not restore old discussions, and clearing discussions does not touch
+the corpus.
 
 If the volume is ever lost, `START.bat /check` rebuilds the user and the vector
 memory setting, then this puts the ten sample articles back:

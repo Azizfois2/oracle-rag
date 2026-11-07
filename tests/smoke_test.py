@@ -315,6 +315,55 @@ def main() -> int:
               served.text == "from cache" and served.cached, served.text)
         check("cached answer reports zero elapsed", served.elapsed == 0.0)
 
+    print("\n== streaming contract ==")
+    class FakeChunk:
+        def __init__(self, text: str, kind: str = "ai", tool: bool = False) -> None:
+            self.content = text
+            self.type = kind
+            self.tool_calls = ([{"name": "search_tech_news",
+                                 "args": {"query": "x"}}] if tool else [])
+            self.tool_call_chunks = ([{"name": "search_tech_news", "args": "{}"}]
+                                     if tool else [])
+
+    class FakeGraph:
+        def stream(self, *args: object, **kwargs: object):
+            yield ("updates", {"agent": {"messages": []}})
+            yield ("messages", (FakeChunk("Hello "), {}))
+            yield ("messages", (FakeChunk("world"), {}))
+            yield ("messages", (FakeChunk("ignore preamble", tool=True), {}))
+            yield ("messages", (FakeChunk("SOURCE TEXT", kind="tool"), {}))
+            yield ("updates", {"agent": {"messages": []}})
+
+    class FakeMemory:
+        def get(self) -> None:
+            return None
+
+        def set(self, model: str) -> None:
+            return None
+
+    with tempfile.TemporaryDirectory() as tmp:
+        stream_agent = rc.Agent(
+            engine,
+            rc.Settings(gemini_key="test-key"),
+            cache=rc.AnswerCache(Path(tmp) / "answers.json"),
+        )
+        stream_agent._graph = lambda model: FakeGraph()  # type: ignore[assignment]
+        stream_agent.memory = FakeMemory()  # type: ignore[assignment]
+        tokens: list[str] = []
+        resets: list[bool] = []
+        streamed = stream_agent.ask(
+            "stream please", use_cache=False,
+            on_token=tokens.append, on_reset=lambda: resets.append(True),
+        )
+        check("streamed tokens arrive in order", "".join(tokens) == "Hello world",
+              repr("".join(tokens)))
+        check("streamed answer is complete", streamed.text == "Hello world",
+              streamed.text)
+        check("streaming resets once before the model", len(resets) == 1,
+              str(len(resets)))
+        check("tool output is not part of the answer",
+              "SOURCE" not in streamed.text and "ignore" not in streamed.text)
+
     if want_llm:
         print("\n== agent (spends quota) ==")
         agent = rc.Agent(engine, settings)
