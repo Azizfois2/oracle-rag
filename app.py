@@ -10,6 +10,7 @@ import datetime as dt
 import html
 import json
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -92,6 +93,7 @@ h2{ font-size:1.08rem; font-weight:600; letter-spacing:-.01em; margin:.1rem 0 .4
 h3{ font-size:.88rem; font-weight:600; margin:.2rem 0 .35rem; }
 p, li{ font-size:.89rem; line-height:1.6; }
 .small{ font-size:.77rem; color:var(--ink2); line-height:1.55; }
+mark{ background:#F6DFC9; color:var(--ink); padding:0 .1em; border-radius:2px; }
 .mono{ font-family:"IBM Plex Mono",ui-monospace,Consolas,monospace; font-variant-numeric:tabular-nums; }
 .kw-t{ color:var(--kw); } .vec-t{ color:var(--vec); } .hyb-t{ color:var(--hyb); }
 .rer-t{ color:var(--rer); }
@@ -230,6 +232,27 @@ def when(value: object) -> str:
     return stamp.strftime("%b %d, %Y")
 
 
+def highlight(text: object, query: str) -> str:
+    """Escape a snippet, then wrap each searched word in a mark."""
+    body = str(text or "")
+    terms = sorted({word for word in str(query or "").split() if len(word) > 1},
+                   key=len, reverse=True)
+    if not terms:
+        return esc(body)
+    pattern = re.compile("(" + "|".join(re.escape(word) for word in terms) + ")",
+                         re.IGNORECASE)
+    parts = pattern.split(body)
+    return "".join(
+        f"<mark>{html.escape(part)}</mark>" if index % 2 else html.escape(part)
+        for index, part in enumerate(parts)
+    )
+
+
+def more_history() -> None:
+    limit = int(st.session_state.get("history_limit", 4))
+    st.session_state.history_limit = min(50, limit + 4)
+
+
 def fresh_chat() -> None:
     st.session_state.chat_id = uuid.uuid4().hex
     st.session_state.chat = []
@@ -239,6 +262,7 @@ def fresh_chat() -> None:
 
 def clear_history_search() -> None:
     st.session_state.history_search = ""
+    st.session_state.history_limit = 4
 
 
 def open_chat(history: rc.ChatHistory, chat_id: str) -> None:
@@ -274,6 +298,14 @@ def save_message(history: rc.ChatHistory, role: str, content: str,
         history.append(st.session_state.get("chat_id"), role, content, answer=answer)
     except rc.RagError as exc:
         st.session_state.history_flash = f"This discussion was not saved: {exc}"
+
+
+def follow_context() -> list[dict]:
+    """Earlier turns, excluding the question that was just added."""
+    if not st.session_state.get("follow_context", True):
+        return []
+    chat = st.session_state.get("chat") or []
+    return list(chat[:-1]) if chat else []
 
 
 # --------------------------------------------------------------------------- #
@@ -318,6 +350,12 @@ def render_sidebar(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
             key="local_mode",
             help="Retrieval only, no model call, zero quota. Useful when the free tier is spent.",
         )
+        st.toggle(
+            "Follow-up context",
+            key="follow_context",
+            help="Send the last few turns with the question, so follow-ups like "
+                 "'who funded them?' still make sense. Off means every question stands alone.",
+        )
         if not settings.has_llm:
             st.markdown('<p class="small">No Gemini key found, so only local mode is available. '
                         'Add <span class="mono">GEMINI_API_KEY</span> to '
@@ -338,19 +376,28 @@ def render_sidebar(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
         if query:
             st.button("Clear search", key="clear_history_search",
                       on_click=clear_history_search, use_container_width=True)
+        limit = int(st.session_state.get("history_limit", 4))
+        found: list[dict] = []
         try:
-            chats = history.search(query, limit=4) if query else history.list(limit=6)
+            if query:
+                found = history.search(query, limit=50)
+                chats = found[:limit]
+            else:
+                chats = history.list(limit=6)
         except rc.RagError as exc:
             chats = []
             st.markdown(f'<p class="small">{esc(exc)}</p>', unsafe_allow_html=True)
+        if query and found:
+            noun = "discussion" if len(found) == 1 else "discussions"
+            st.markdown(f'<p class="small">{len(found)} {noun} match.</p>',
+                        unsafe_allow_html=True)
         if not chats:
             message = ("No discussion matches those words." if query
                        else "No saved discussions yet.")
             st.markdown(f'<p class="small">{message}</p>', unsafe_allow_html=True)
         for item in chats:
             active = item["id"] == st.session_state.get("chat_id")
-            help_text = (f'{item.get("matches", 0)} matching messages · '
-                         f'{item.get("snippet", "")}'
+            help_text = (f'{item.get("matches", 0)} matching messages'
                          if query else
                          f'{item["messages"]} messages · {when(item["updated"])}')
             if st.button(
@@ -362,16 +409,58 @@ def render_sidebar(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
             ):
                 open_chat(history, item["id"])
                 st.rerun()
+            if query:
+                st.markdown(
+                    f'<p class="small">{highlight(item.get("snippet", ""), query)}</p>',
+                    unsafe_allow_html=True,
+                )
+        if query and len(found) > limit:
+            st.button("Show more", key="more_history", on_click=more_history,
+                      use_container_width=True)
 
         if st.session_state.get("chat_id"):
             with st.expander("Manage this discussion"):
-                if st.session_state.get("confirm_delete") == st.session_state.get("chat_id"):
+                chat_id = st.session_state.chat_id
+                try:
+                    current_title = history.title(chat_id)
+                except rc.RagError:
+                    current_title = "Untitled discussion"
+                new_title = st.text_input("Discussion title", value=current_title,
+                                          key=f"rename_title_{chat_id}")
+                if st.button("Rename", key="rename_chat", use_container_width=True):
+                    label = " ".join((new_title or "").split())
+                    if not label:
+                        st.warning("A discussion needs a title.")
+                    elif label != current_title:
+                        try:
+                            history.rename(chat_id, label)
+                        except rc.RagError as exc:
+                            st.session_state.history_flash = str(exc)
+                        else:
+                            st.session_state.history_flash = "Discussion renamed."
+                        st.rerun()
+
+                try:
+                    export = history.export_markdown(chat_id)
+                except rc.RagError:
+                    export = ""
+                if export:
+                    st.download_button(
+                        "Download discussion",
+                        data=export.encode("utf-8"),
+                        file_name=f"discussion-{chat_id[:8]}-{dt.datetime.now():%Y%m%d-%H%M}.md",
+                        mime="text/markdown",
+                        key="download_discussion",
+                        use_container_width=True,
+                    )
+
+                if st.session_state.get("confirm_delete") == chat_id:
                     st.markdown('<p class="small">Delete this discussion and all of its '
                                 'messages?</p>', unsafe_allow_html=True)
                     if st.button("Yes, delete", key="delete_yes", type="primary",
                                  use_container_width=True):
                         try:
-                            removed = history.delete(st.session_state.chat_id)
+                            removed = history.delete(chat_id)
                         except rc.RagError as exc:
                             st.session_state.history_flash = str(exc)
                         else:
@@ -391,7 +480,7 @@ def render_sidebar(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
                         st.rerun()
                 elif st.button("Delete this discussion", key="delete_chat",
                                use_container_width=True):
-                    st.session_state.confirm_delete = st.session_state.chat_id
+                    st.session_state.confirm_delete = chat_id
                     st.rerun()
 
         st.divider()
@@ -498,6 +587,7 @@ def answer_flow(question: str, settings: rc.Settings, agent: rc.Agent,
                 history: rc.ChatHistory) -> None:
     st.session_state.chat.append({"role": "user", "content": question})
     save_message(history, "user", question)
+    context = follow_context()
     with st.chat_message("user"):
         st.markdown(question)
 
@@ -533,10 +623,11 @@ def answer_flow(question: str, settings: rc.Settings, agent: rc.Agent,
 
         try:
             if local:
-                answer = agent.ask_local(question)
+                answer = agent.ask_local(question, context=context)
             else:
                 answer = agent.ask(question, on_step=on_step,
-                                   on_token=on_token, on_reset=on_reset)
+                                   on_token=on_token, on_reset=on_reset,
+                                   context=context)
             status.update(label=f"Answered in {answer.elapsed:.1f}s",
                           state="complete", expanded=False)
         except rc.QuotaExhausted as exc:
@@ -610,11 +701,26 @@ def tab_ask(settings: rc.Settings, agent: rc.Agent, history: rc.ChatHistory,
 # search lab
 # --------------------------------------------------------------------------- #
 def tab_lab(engine: rc.RagEngine) -> None:
+    try:
+        names = [row["source"] for row in engine.sources()]
+    except rc.RagError:
+        names = []
+    options = ["All sources"] + names
+    if st.session_state.get("lab_source") not in options:
+        st.session_state["lab_source"] = "All sources"
     with st.form("lab", border=False):
-        query = st.text_input(
+        top_left, top_right = st.columns([2.2, 1])
+        query = top_left.text_input(
             "Query",
             value=st.session_state.get("lab_query", "companies building hybrid search"),
             placeholder="e.g. which startup is challenging Pinecone?",
+        )
+        source = top_right.selectbox(
+            "Source",
+            options,
+            key="lab_source",
+            help="Filter every retrieval path to one document. This corpus stores "
+                 "source metadata only; date filters need a corpus schema change.",
         )
         left, middle, right = st.columns([1, 1.6, 1])
         k = left.slider("Results per path", 3, 10, 5)
@@ -627,10 +733,12 @@ def tab_lab(engine: rc.RagEngine) -> None:
 
     if submitted and query.strip():
         st.session_state.lab_query = query.strip()
+        only = None if source == "All sources" else source
         with st.spinner("Querying keyword, vector, hybrid and the reranker"):
             try:
                 st.session_state.bundle = engine.search_all(
-                    query.strip(), k=int(k), weight=float(weight), rerank=True)
+                    query.strip(), k=int(k), weight=float(weight), rerank=True,
+                    source=only)
                 st.session_state.bundle_at = time.strftime("%H:%M:%S")
             except rc.RagError as exc:
                 st.error(str(exc))
@@ -647,12 +755,15 @@ def tab_lab(engine: rc.RagEngine) -> None:
 
     memberships = bundle.all_keys()
     shared = bundle.consensus()
+    filter_note = (f' · source <span class="mono">{esc(bundle.source)}</span>'
+                   if bundle.source else "")
     st.markdown(
         f'<p class="small"><span class="mono">{esc(bundle.query)}</span> · '
         f'{bundle.total} documents across the four paths · '
         f'{len(shared)} found by at least two · '
         f'fusion took <span class="mono">{bundle.timings["hybrid"]:.0f} ms</span> · '
-        f'rerank took <span class="mono">{bundle.timings["rerank"]:.0f} ms</span></p>',
+        f'rerank took <span class="mono">{bundle.timings["rerank"]:.0f} ms</span>'
+        f'{filter_note}</p>',
         unsafe_allow_html=True,
     )
 
@@ -1196,6 +1307,8 @@ def main() -> None:
 
     settings, engine, agent, history = boot()
     st.session_state.setdefault("local_mode", not settings.has_llm)
+    st.session_state.setdefault("follow_context", True)
+    st.session_state.setdefault("history_limit", 4)
     st.session_state.setdefault("bundle", None)
 
     db = engine.ping()

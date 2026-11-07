@@ -220,6 +220,7 @@ class SearchBundle:
     hybrid: list[Hit]
     timings: dict[str, float]
     rerank: list[Hit] = field(default_factory=list)
+    source: str = ""
 
     def all_keys(self) -> dict[str, set[str]]:
         return {
@@ -344,6 +345,32 @@ def _terms(query: str, limit: int = 6) -> list[str]:
         if len(picked) >= limit:
             break
     return picked
+
+
+def _context_messages(context: Sequence[dict[str, Any]] | None,
+                      limit: int = 6, chars: int = 2000) -> list[tuple[str, str]]:
+    """Turn saved chat turns into plain user/assistant messages.
+
+    Only the last few turns are sent, and each is capped, so a long discussion
+    cannot crowd out the retrieved passages or the current question. Errors are
+    skipped: they are not part of the conversation the model should continue.
+    """
+    out: list[tuple[str, str]] = []
+    for item in context or []:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", ""))
+        if role == "assistant":
+            answer = item.get("answer")
+            text = str(item.get("content") or getattr(answer, "text", "") or "")
+        elif role == "user":
+            text = str(item.get("content") or "")
+        else:
+            continue
+        text = text.strip()
+        if text:
+            out.append((role, text[:chars]))
+    return out[-limit:]
 
 
 def message_text(message: Any) -> str:
@@ -1014,6 +1041,53 @@ class ChatHistory:
                 out.append({"role": speaker, "content": content, "at": at})
         return out
 
+    def title(self, chat_id: str) -> str:
+        """The stored title of one discussion, or a safe fallback."""
+        key = str(chat_id or "").strip()
+        if not key:
+            return "Untitled discussion"
+        self.ensure()
+        cur = self.e.ensure().cursor()
+        try:
+            cur.execute(
+                f"SELECT MAX(title) FROM {self.table} WHERE chat_id = :c",
+                {"c": key},
+            )
+            row = cur.fetchone()
+            return str(row[0]) if row and row[0] else "Untitled discussion"
+        finally:
+            cur.close()
+
+    def export_markdown(self, chat_id: str) -> str:
+        """One discussion as a readable Markdown file, traces included."""
+        title = self.title(chat_id)
+        lines = [f"# {title}", ""]
+        for item in self.messages(chat_id):
+            if item["role"] == "user":
+                lines += ["## You", "", str(item.get("content", "")), ""]
+            elif item["role"] == "error":
+                lines += ["## Error", "", str(item.get("content", "")), ""]
+            else:
+                answer = item.get("answer")
+                text = str(getattr(answer, "text", "") or "")
+                lines += ["## Answer", "", text, ""]
+                sources = list(getattr(answer, "sources", []) or [])
+                if sources:
+                    lines += ["### Sources", ""]
+                    for source in sources:
+                        name = str(source.get("source", "unknown"))
+                        score = float(source.get("relevance", 0.0) or 0.0)
+                        lines.append(f"- {name} ({score:.2f})")
+                    lines.append("")
+                steps = list(getattr(answer, "steps", []) or [])
+                if steps:
+                    lines += ["### Trace", ""]
+                    for step in steps:
+                        detail = f" {step.detail}" if step.detail else ""
+                        lines.append(f"- {step.kind}: {step.label}{detail}")
+                    lines.append("")
+        return "\n".join(lines).rstrip() + "\n"
+
     def stats(self) -> dict[str, Any]:
         self.ensure()
         cur = self.e.ensure().cursor()
@@ -1142,10 +1216,11 @@ class RagEngine:
         ranked.sort(key=lambda h: (-h.score, h.key))
         return ranked[:k]
 
-    def reranked_search(self, query: str, k: int = 5, weight: float = 0.6) -> list[Hit]:
+    def reranked_search(self, query: str, k: int = 5, weight: float = 0.6,
+                        source: str | None = None) -> list[Hit]:
         """Hybrid retrieval over a wider pool, then cross-encoder reranking."""
         self._require_table()
-        pool = self.hybrid_search(query, max(k * 6, 30), weight)
+        pool = self.hybrid_search(query, max(k * 6, 30), weight, source)
         return self.rerank_hits(query, pool, k)
 
     @property
@@ -1374,8 +1449,13 @@ class RagEngine:
         self._vec_cache[query] = vec
         return vec
 
-    def _vector_pool(self, query: str, pool: int) -> list[Hit]:
+    def _vector_pool(self, query: str, pool: int, source: str | None = None) -> list[Hit]:
         limit = max(1, int(pool))
+        params: dict[str, Any] = {"q": self._query_vector(query)}
+        where = ""
+        if source:
+            where = "WHERE JSON_VALUE(metadata, '$.source') = :src"
+            params["src"] = source
         cur = self.ensure().cursor()
         try:
             cur.execute(
@@ -1383,10 +1463,11 @@ class RagEngine:
                 SELECT id, text, metadata,
                        1 - VECTOR_DISTANCE(embedding, :q, COSINE) AS sim
                 FROM {self.s.table}
+                {where}
                 ORDER BY VECTOR_DISTANCE(embedding, :q, COSINE)
                 FETCH APPROX FIRST {limit} ROWS ONLY
                 """,
-                {"q": self._query_vector(query)},
+                params,
             )
             rows = cur.fetchall()
         finally:
@@ -1399,15 +1480,22 @@ class RagEngine:
         hits.sort(key=lambda h: (-h.score, h.key))
         return hits
 
-    def vector_search(self, query: str, k: int = 5) -> list[Hit]:
+    def vector_search(self, query: str, k: int = 5,
+                      source: str | None = None) -> list[Hit]:
         self._require_table()
-        return self._vector_pool(query, max(k * 4, 20))[:k]
+        return self._vector_pool(query, max(k * 4, 20), source)[:k]
 
-    def _keyword_pool(self, query: str, pool: int) -> list[Hit]:
+    def _keyword_pool(self, query: str, pool: int,
+                      source: str | None = None) -> list[Hit]:
         terms = _terms(query)
         if not terms:
             return []
         expr = " OR ".join(terms)
+        params: dict[str, Any] = {"expr": expr}
+        where = "CONTAINS(text, :expr, 1) > 0"
+        if source:
+            where += " AND JSON_VALUE(metadata, '$.source') = :src"
+            params["src"] = source
         cur = self.ensure().cursor()
         rows: list[tuple[Any, Any, Any, float]] = []
         try:
@@ -1416,18 +1504,18 @@ class RagEngine:
                     f"""
                     SELECT id, text, metadata, SCORE(1) AS kw
                     FROM {self.s.table}
-                    WHERE CONTAINS(text, :expr, 1) > 0
+                    WHERE {where}
                     ORDER BY kw DESC, id
                     FETCH FIRST {int(pool)} ROWS ONLY
                     """,
-                    {"expr": expr},
+                    params,
                 )
                 fetched = cur.fetchall()
                 rows = [(r[0], r[1], r[2], float(r[3] or 0.0)) for r in fetched]
             except oracledb.Error:
                 # Oracle Text refused the expression (or the index is missing).
                 # Fall back to a substring scan so the keyword column never lies.
-                rows = self._keyword_fallback(cur, terms, pool)
+                rows = self._keyword_fallback(cur, terms, pool, source)
         finally:
             cur.close()
 
@@ -1441,15 +1529,21 @@ class RagEngine:
         hits.sort(key=lambda h: (-h.score, h.key))
         return hits
 
-    def _keyword_fallback(self, cur: Any, terms: Sequence[str], pool: int) -> list[tuple[Any, Any, Any, float]]:
+    def _keyword_fallback(self, cur: Any, terms: Sequence[str], pool: int,
+                          source: str | None = None) -> list[tuple[Any, Any, Any, float]]:
         found: dict[str, tuple[Any, Any, Any, float]] = {}
         for term in terms[:4]:
+            params: dict[str, Any] = {"w": term.upper()}
+            where = "DBMS_LOB.INSTR(UPPER(text), :w) > 0"
+            if source:
+                where += " AND JSON_VALUE(metadata, '$.source') = :src"
+                params["src"] = source
             try:
                 cur.execute(
                     f"SELECT id, text, metadata FROM {self.s.table} "
-                    "WHERE DBMS_LOB.INSTR(UPPER(text), :w) > 0 "
+                    f"WHERE {where} "
                     f"ORDER BY id FETCH FIRST {int(pool)} ROWS ONLY",
-                    {"w": term.upper()},
+                    params,
                 )
             except oracledb.Error:
                 continue
@@ -1462,16 +1556,18 @@ class RagEngine:
                     found[key] = (rid, text, meta, float(score))
         return list(found.values())
 
-    def keyword_search(self, query: str, k: int = 5) -> list[Hit]:
+    def keyword_search(self, query: str, k: int = 5,
+                       source: str | None = None) -> list[Hit]:
         self._require_table()
-        return self._keyword_pool(query, max(k * 4, 20))[:k]
+        return self._keyword_pool(query, max(k * 4, 20), source)[:k]
 
-    def hybrid_search(self, query: str, k: int = 5, weight: float = 0.6) -> list[Hit]:
+    def hybrid_search(self, query: str, k: int = 5, weight: float = 0.6,
+                      source: str | None = None) -> list[Hit]:
         self._require_table()
         weight = max(0.0, min(1.0, float(weight)))
         pool = max(k * 4, 20)
-        vec = {h.key: h for h in self._vector_pool(query, pool)}
-        kw = {h.key: h for h in self._keyword_pool(query, pool)}
+        vec = {h.key: h for h in self._vector_pool(query, pool, source)}
+        kw = {h.key: h for h in self._keyword_pool(query, pool, source)}
 
         # Cosine similarity lives in a narrow band (~0.2-0.6 here) while keyword
         # scores are already 0-1, so a raw weighted sum would silently favour
@@ -1525,34 +1621,36 @@ class RagEngine:
             threading.Thread(target=self.warm, name="embed-warm", daemon=True).start()
 
     def search_all(self, query: str, k: int = 5, weight: float = 0.6,
-                   rerank: bool = False) -> SearchBundle:
+                   rerank: bool = False, source: str | None = None) -> SearchBundle:
         self._require_table()
         _ = self.embeddings          # never charge model loading to a search's latency
         self._query_vector(query)    # embed once; the three paths share the vector
         timings: dict[str, float] = {}
+        only = str(source or "").strip() or None
 
         start = time.perf_counter()
-        keyword = self.keyword_search(query, k)
+        keyword = self.keyword_search(query, k, only)
         timings["keyword"] = (time.perf_counter() - start) * 1000
 
         start = time.perf_counter()
-        vector = self.vector_search(query, k)
+        vector = self.vector_search(query, k, only)
         timings["vector"] = (time.perf_counter() - start) * 1000
 
         start = time.perf_counter()
-        hybrid = self.hybrid_search(query, k, weight)
+        hybrid = self.hybrid_search(query, k, weight, only)
         timings["hybrid"] = (time.perf_counter() - start) * 1000
 
         reranked: list[Hit] = []
         if rerank:
             _ = self.reranker        # load once, outside the timed rerank stage
             start = time.perf_counter()
-            candidates = self.hybrid_search(query, max(k * 6, 30), weight)
+            candidates = self.hybrid_search(query, max(k * 6, 30), weight, only)
             reranked = self.rerank_hits(query, candidates, k)
             timings["rerank"] = (time.perf_counter() - start) * 1000
 
         return SearchBundle(query=query, keyword=keyword, vector=vector,
-                            hybrid=hybrid, timings=timings, rerank=reranked)
+                            hybrid=hybrid, timings=timings, rerank=reranked,
+                            source=only or "")
 
     # -- corpus -------------------------------------------------------------
     def source_exists(self, source: str) -> bool:
@@ -1813,10 +1911,12 @@ class Agent:
     def ask(self, question: str, on_step: Callable[[str, str], None] | None = None,
             recursion_limit: int = 25, use_cache: bool = True,
             on_token: Callable[[str], None] | None = None,
-            on_reset: Callable[[], None] | None = None) -> Answer:
+            on_reset: Callable[[], None] | None = None,
+            context: Sequence[dict[str, Any]] | None = None) -> Answer:
         question = (question or "").strip()
         if not question:
             raise RagError("ask something first")
+        turns = _context_messages(context)
 
         def emit(kind: str, text: str) -> None:
             if on_step is not None:
@@ -1876,7 +1976,8 @@ class Agent:
         if use_cache:
             corpus = self.engine.corpus_fingerprint()
             if corpus:
-                cache_key = self.cache.key(question, corpus)
+                extra = {"context": turns} if turns else None
+                cache_key = self.cache.key(question, corpus, extra=extra)
                 cached = self.cache.get(cache_key)
                 if cached is not None:
                     reset_stream()
@@ -1899,12 +2000,16 @@ class Agent:
             counter = _CountCalls(self.quota, model)
             steps: list[Step] = []
             sources: list[dict[str, Any]] = []
+            if turns:
+                note = f"{len(turns)} earlier messages in context"
+                steps.append(Step("note", note, ""))
+                emit("note", note)
             started = time.perf_counter()
             try:
                 final: str | None = None
                 if on_token is None:
                     for update in self._graph(model).stream(
-                        {"messages": [("user", question)]},
+                        {"messages": [*turns, ("user", question)]},
                         config={"callbacks": [counter], "recursion_limit": recursion_limit},
                         stream_mode="updates",
                     ):
@@ -1914,7 +2019,7 @@ class Agent:
                 else:
                     tokens: list[str] = []
                     for mode, payload in self._graph(model).stream(
-                        {"messages": [("user", question)]},
+                        {"messages": [*turns, ("user", question)]},
                         config={"callbacks": [counter], "recursion_limit": recursion_limit},
                         stream_mode=["updates", "messages"],
                     ):
@@ -1978,13 +2083,20 @@ class Agent:
         )
 
     # -- local mode ---------------------------------------------------------
-    def ask_local(self, question: str, k: int = 4, weight: float = 0.6) -> Answer:
+    def ask_local(self, question: str, k: int = 4, weight: float = 0.6,
+                  context: Sequence[dict[str, Any]] | None = None) -> Answer:
         question = (question or "").strip()
         if not question:
             raise RagError("ask something first")
+        turns = _context_messages(context)
+        last_user = next((text for role, text in reversed(turns) if role == "user"), "")
+        search_query = f"{last_user} {question}".strip() if last_user else question
         started = time.perf_counter()
-        bundle = self.engine.search_all(question, k=k, weight=weight)
-        steps = [
+        bundle = self.engine.search_all(search_query, k=k, weight=weight)
+        steps: list[Step] = []
+        if turns:
+            steps.append(Step("note", f"{len(turns)} earlier messages in context", ""))
+        steps += [
             Step("search", "keyword", f"{len(bundle.keyword)} hits · {bundle.timings['keyword']:.0f} ms"),
             Step("search", "vector", f"{len(bundle.vector)} hits · {bundle.timings['vector']:.0f} ms"),
             Step("search", "hybrid", f"{len(bundle.hybrid)} hits · {bundle.timings['hybrid']:.0f} ms"),

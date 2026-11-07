@@ -190,6 +190,22 @@ def main() -> int:
     check("rerank is opt-in and off by default",
           plain.rerank == [] and "rerank" not in plain.timings)
 
+    target = "07_startup_vector_database.md"
+    if engine.source_exists(target):
+        filtered = engine.search_all("hybrid search", k=5, source=target)
+        hits = filtered.keyword + filtered.vector + filtered.hybrid
+        check("source filter is recorded", filtered.source == target, filtered.source)
+        check("source filter keeps every hit in that source",
+              bool(hits) and all(h.source == target for h in hits),
+              f"{len(hits)} hits")
+        reranked = engine.search_all("hybrid search", k=5, source=target, rerank=True)
+        check("source filter keeps reranked hits in that source",
+              bool(reranked.rerank)
+              and all(h.source == target for h in reranked.rerank),
+              f"{len(reranked.rerank)} hits")
+    else:
+        check("source filter target exists", False, target)
+
     # the weight slider must actually change the ranking
     zero = engine.hybrid_search("hybrid search", k=5, weight=0.0)
     one = engine.hybrid_search("hybrid search", k=5, weight=1.0)
@@ -326,7 +342,12 @@ def main() -> int:
                                      if tool else [])
 
     class FakeGraph:
+        def __init__(self) -> None:
+            self.inputs: list[dict] = []
+
         def stream(self, *args: object, **kwargs: object):
+            if args and isinstance(args[0], dict):
+                self.inputs.append(args[0])
             yield ("updates", {"agent": {"messages": []}})
             yield ("messages", (FakeChunk("Hello "), {}))
             yield ("messages", (FakeChunk("world"), {}))
@@ -347,7 +368,8 @@ def main() -> int:
             rc.Settings(gemini_key="test-key"),
             cache=rc.AnswerCache(Path(tmp) / "answers.json"),
         )
-        stream_agent._graph = lambda model: FakeGraph()  # type: ignore[assignment]
+        graph = FakeGraph()
+        stream_agent._graph = lambda model: graph  # type: ignore[assignment]
         stream_agent.memory = FakeMemory()  # type: ignore[assignment]
         tokens: list[str] = []
         resets: list[bool] = []
@@ -363,6 +385,32 @@ def main() -> int:
               str(len(resets)))
         check("tool output is not part of the answer",
               "SOURCE" not in streamed.text and "ignore" not in streamed.text)
+
+        follow = stream_agent.ask(
+            "and who funded them?", use_cache=False,
+            on_token=lambda text: None,
+            context=[
+                {"role": "user", "content": "Which company raised money?"},
+                {"role": "assistant",
+                 "answer": rc.Answer(text="VectorForge did.", model="fake")},
+            ],
+        )
+        sent = graph.inputs[-1]["messages"]
+        check("follow-up context precedes the question",
+              len(sent) == 3 and sent[0] == ("user", "Which company raised money?")
+              and sent[1] == ("assistant", "VectorForge did.")
+              and sent[2] == ("user", "and who funded them?"),
+              repr(sent))
+        check("follow-up context is noted in the trace",
+              any(step.kind == "note" for step in follow.steps),
+              str([(s.kind, s.label) for s in follow.steps]))
+        check("context changes the answer cache key",
+              rc.AnswerCache.key("q", "1:2")
+              != rc.AnswerCache.key("q", "1:2", extra={"context": [("user", "x")]}))
+        check("errors are not sent as context",
+              rc._context_messages([{"role": "error", "content": "quota"},
+                                    {"role": "user", "content": "q"}])
+              == [("user", "q")])
 
     if want_llm:
         print("\n== agent (spends quota) ==")

@@ -114,6 +114,17 @@ def main() -> int:
         check("rename collapses extra spaces",
               bool(row) and row["title"] == "Price and funding",
               row["title"] if row else "none")
+        check("title reads the stored title",
+              history.title(chat_id) == "Price and funding", history.title(chat_id))
+        check("unknown discussion gets a safe title",
+              history.title("missing") == "Untitled discussion")
+
+        exported = history.export_markdown(chat_id)
+        check("export includes the question", "Series B" in exported)
+        check("export includes the answer", "VectorForge raised $85M." in exported)
+        check("export includes sources", "07_startup_vector_database.md" in exported)
+        check("export includes the trace", "Trace" in exported and "vector" in exported)
+        check("export includes the error", "Quota exhausted" in exported)
 
         history.append(other_id, "user", "What did AWS release?")
         history.append(other_id, "assistant",

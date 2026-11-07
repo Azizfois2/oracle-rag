@@ -87,8 +87,11 @@ Chat with the ReAct agent over the corpus.
   relevance, model used, API calls spent, wall-clock time.
 - **Local mode** toggle: hybrid retrieval with no LLM at all. Zero quota, still
   useful, and the honest fallback when the free tier is empty.
+- **Follow-up context** toggle: the last few turns travel with the question, so
+  "who funded them?" still makes sense. The trace says how many were sent.
 - Discussions are saved in Oracle and restored on open. The sidebar lists recent
-  threads, searches their text, and puts deletion behind a confirmation.
+  threads, searches their text, can rename them, downloads them as Markdown, and
+  puts deletion behind a confirmation.
 - Empty state teaches: four example questions, one click each.
 
 *Success:* a non-technical person gets a sourced answer in under 30 seconds and
@@ -102,6 +105,9 @@ One query, four retrieval paths, one screen.
 - Each hit: rank, source, score bar, snippet, and badges showing which *other*
   paths found it too.
 - A weight slider that moves fusion from keyword-only to vector-only, live.
+- A source filter that applies to every path, so one document can be inspected
+  on its own. The corpus stores source metadata only; date filters need a schema
+  change.
 - Per-path latency in milliseconds.
 - A consensus line: how many documents the four methods agree on.
 
@@ -184,12 +190,12 @@ beyond a few seconds.
 |---|---|
 | Config | `Settings.from_env()`, `Settings.models()` |
 | Connection | `RagEngine.connect()`, `.ensure()`, `.stats()` |
-| Retrieval | `.keyword_search(q,k)`, `.vector_search(q,k)`, `.hybrid_search(q,k,w)`, `.rerank_hits(q,hits,k)`, `.reranked_search(q,k,w)`, `.search_all(q,k,w,rerank=)` |
+| Retrieval | `.keyword_search(q,k,source=)`, `.vector_search(q,k,source=)`, `.hybrid_search(q,k,w,source=)`, `.rerank_hits(q,hits,k)`, `.reranked_search(q,k,w,source=)`, `.search_all(q,k,w,rerank=,source=)` |
 | Corpus | `.sources()`, `.ingest(text, source)`, `.delete_source(s)`, `.reindex()`, `.export_corpus()`, `.import_documents(docs, replace=)` |
-| Agent | `Agent.ask(q, on_step=, on_token=, on_reset=)`, `ask_local(q)` |
+| Agent | `Agent.ask(q, on_step=, on_token=, on_reset=, context=)`, `ask_local(q, context=)` |
 | Budget | `Quota.status()`, `.record()`, `.mark_exhausted()` |
 | Cache | `AnswerCache.key()`, `.get()`, `.put()`, `.stats()`, `.clear()` |
-| History | `ChatHistory.list()`, `.search()`, `.messages()`, `.append()`, `.rename()`, `.delete()`, `.clear()` |
+| History | `ChatHistory.list()`, `.search()`, `.messages()`, `.title()`, `.export_markdown()`, `.append()`, `.rename()`, `.delete()`, `.clear()` |
 | MCP | `mcp_server.py`: `search_corpus`, `list_sources`, `corpus_info` (read-only, stdio) |
 | CLI | `ask.py "question"`, `--local`, `--json`, `--no-cache` |
 
@@ -275,12 +281,19 @@ with the latest matching message as the snippet. Streaming adds an optional
 callbacks pair to `Agent.ask`; the cache, sources and model fallback are
 unchanged.
 
+**v1.8**
+Follow-up questions carry the last few turns, behind a sidebar toggle, and the
+cache key includes that context. Discussions can be renamed and downloaded as
+Markdown. Search shows a count, highlights the matching words and pages past the
+first four. The Search lab filters every path to one source.
+
 **Next**
-Metadata filters (source, date), a larger and more varied labelled set,
-multi-collection support.
+Date metadata in the corpus (the current schema stores source only), a larger and
+more varied labelled set, multi-collection support.
 
 **Later**
-Follow-up questions that use the current discussion as context.
+Longer discussions with summarised memory, inline citation links, and a shareable
+static report.
 
 ---
 
@@ -294,8 +307,11 @@ Follow-up questions that use the current discussion as context.
 - [x] Quota is counted, persisted, and visible; exhausted models are skipped.
 - [x] Agent answers carry a trace with sources and call count.
 - [x] A remote answer streams in token by token and still ends with the full trace.
+- [x] A follow-up sends the earlier turns and the cache key includes them.
 - [x] A discussion survives a Streamlit restart, with its trace and sources.
 - [x] A word from a saved discussion finds that thread from the sidebar.
+- [x] A saved discussion can be renamed and downloaded with its sources.
+- [x] The Search lab can restrict every retrieval path to one source.
 - [x] An MCP client can list three tools and search the corpus over stdio.
 - [x] `python tests/smoke_test.py` passes without spending API quota.
 - [x] No secret in git history; `.env` and `data/` ignored.
@@ -324,3 +340,6 @@ Follow-up questions that use the current discussion as context.
 | **Discussions in Oracle, not browser storage or a JSON file** | The corpus already lives in Oracle, so history survives a browser reset and a machine restart, needs no second backup file, and can be queried with SQL. Browser storage is fragile, and a JSON file would be one more source of truth. The table is created on first use and never dropped automatically. |
 | **Substring search over history, not full-text indexing** | A second Oracle Text index would complicate setup for a table that holds one person's chats. A case-insensitive substring match is predictable, needs no index maintenance, and stays fast at this size. Wildcards are escaped so `%` means the character, not "anything". |
 | **Token callbacks on `Agent.ask`, not a second agent** | `on_token` and `on_reset` are optional, so the CLI, the MCP server and every test keep the same call. Streaming reuses the same graph and the same quota counter; only the event mode changes. The final `Answer` still arrives whole and is what gets cached and saved. |
+| **Follow-up context as messages, not a rewritten prompt** | The graph already accepts a message list, so earlier turns are sent as normal user/assistant messages. The prompt stays one constant, and the CLI keeps asking standalone questions. Only the last six turns are sent, capped per turn, so retrieval still has room. The cache key includes them. |
+| **Source filter in the retrieval SQL, not after ranking** | Filtering after `FETCH APPROX` would silently shrink the candidate pool and change what each path can return. The predicate sits inside every query, so keyword, vector, hybrid and rerank all see the same one-document corpus. |
+| **Markdown export from the stored answer, not a second renderer** | The export is built by `ChatHistory` from the same rows the UI restores, so it carries the same text, sources and trace. No separate template can drift from what the screen shows. |

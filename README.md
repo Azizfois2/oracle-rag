@@ -132,16 +132,19 @@ the app again returns to the latest one.
 - Click a title to reopen it. The answer text, trace, sources and retrieval hits
   all come back.
 - **Find in discussions** searches the saved questions, answers and error text.
-  Matching is case-insensitive, one result per discussion, and the tooltip shows
-  the latest matching message. Typed `%` and `_` are treated as ordinary text.
-- **Manage this discussion -> Delete** removes that thread after a confirmation.
+  Matching is case-insensitive, one result per discussion, with a count, the
+  matching words highlighted in the snippet, and **Show more** past the first
+  four. Typed `%` and `_` are treated as ordinary text.
+- **Manage this discussion** can rename the thread or download it as Markdown,
+  including every source and trace line.
+- **Delete** removes that thread after a confirmation.
 - Health shows the discussion and message counts and can clear all of them.
 
 History uses no Gemini quota and stays in your local database. Clearing it does
 not touch the corpus, the evaluation or the answer cache. The table is created
 automatically on first use.
 
-## Streaming answers
+## Streaming answers and follow-ups
 
 Remote answers are written into the page token by token, so the text starts to
 appear as the model produces it. The trace keeps filling in above, then collapses
@@ -150,6 +153,14 @@ still arriving, and the final message replaces it with the normal formatted
 answer. Sources, the trace, the answer cache and model fallback behave exactly as
 before. Local mode is unchanged: it shows ranked hits, with no model and no
 quota.
+
+**Follow-up context** is on by default. The last few turns of the open discussion
+travel with the new question, so "who funded them?" still makes sense. The trace
+records how many earlier messages were sent. Switch it off in the sidebar when
+each question should stand alone. In local mode the previous question is added to
+the retrieval query, which needs no model. The answer cache includes the context
+in its key, so the same words asked in two different discussions cannot share an
+answer by mistake.
 
 ---
 
@@ -220,8 +231,8 @@ is no longer comparable: run Quality again.
 
 | Surface | What it is for |
 |---|---|
-| **Ask** | ReAct agent over the corpus, with the answer streaming in and a trace: tool calls, queries, sources, API calls, latency. Local mode = no LLM, zero quota. A repeated question is served from cache with no call at all. Discussions are saved in Oracle, restored on open, and searchable from the sidebar. |
-| **Search lab** | The same query through keyword, vector, hybrid and the local reranker at once - scores, snippets, overlap. The proof that each step earns its keep. |
+| **Ask** | ReAct agent over the corpus, with the answer streaming in and a trace: tool calls, queries, sources, API calls, latency. Follow-up context carries the last few turns. Local mode = no LLM, zero quota. A repeated question is served from cache with no call at all. Discussions are saved in Oracle, restored on open, searchable, renameable and downloadable. |
+| **Search lab** | The same query through keyword, vector, hybrid and the local reranker at once - scores, snippets, overlap. Filter every path to one source. The proof that each step earns its keep. |
 | **Corpus** | Source list, chunk counts, ingest text/files, delete a source, rebuild indexes. |
 | **Quality** | 40 labelled questions (single, cross-document, unanswerable) → hit@k and MRR per retrieval path, including the reranker, saved per run. |
 | **Health** | Database version, container state, indexes, embedding model, key presence, per-model quota with reset time, answer cache, discussion history, corpus backup. |
@@ -272,17 +283,19 @@ needs data, `rag_core.py` grows a function.
 ```
 
 `smoke_test.py` covers: settings discovery, connect, stats, the four retrieval
-paths and the local reranker, score ranges, ingest, export, import, search and
-delete round-trips, chunking, quota bookkeeping, and the streaming contract with
-a fake graph. It writes only to a scratch source name and removes it afterwards.
-`--llm` adds one real agent question and is the only test that spends quota.
-`test_cli.py` runs `ask.py` in local mode, so it costs nothing. `test_mcp.py`
-starts the MCP server as a child process and calls every tool over stdio, so it
-also costs nothing. `test_history.py` uses the scratch table
-`RAG_CHAT_LOG_TEST`, checks persistence and search, and drops it, so your real
-discussions are never touched. `test_app.py` also asks one local question,
-searches for it from the sidebar, reopens the app in a second session, checks
-that the discussion came back, and deletes that test thread.
+paths and the local reranker, score ranges, source filtering, ingest, export,
+import, search and delete round-trips, chunking, quota bookkeeping, and the
+streaming and follow-up contract with a fake graph. It writes only to a scratch
+source name and removes it afterwards. `--llm` adds one real agent question and
+is the only test that spends quota. `test_cli.py` runs `ask.py` in local mode, so
+it costs nothing. `test_mcp.py` starts the MCP server as a child process and
+calls every tool over stdio, so it also costs nothing. `test_history.py` uses the
+scratch table `RAG_CHAT_LOG_TEST`, checks persistence, search, rename and export,
+and drops it, so your real discussions are never touched. `test_app.py` also
+asks one local question, searches and renames it, checks the download button,
+drives a fake streaming answer with follow-up context, reopens the app in a
+second session, checks that the discussion came back, and deletes that test
+thread.
 
 ---
 
@@ -297,6 +310,8 @@ that the discussion came back, and deletes that test thread.
 
 `w` is the slider in the Search lab (0 = keyword only, 1 = vector only).
 At either extreme the ranking is exactly the pure path, not an approximation.
+The source filter adds `JSON_VALUE(metadata, '$.source') = :src` inside every
+query, so all four paths rank the same one-document corpus.
 Scores are computed in `rag_core.py` exactly as shown - copy the SQL and re-run it.
 
 The reranker is `cross-encoder/ms-marco-MiniLM-L-6-v2`, loaded on first use and

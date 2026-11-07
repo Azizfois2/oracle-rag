@@ -71,6 +71,26 @@ def main() -> int:
             check("timings present",
                   set(bundle.timings) == {"keyword", "vector", "hybrid", "rerank"},
                   str({k: round(v, 1) for k, v in bundle.timings.items()}))
+        selectors = [s for s in at.selectbox if s.key == "lab_source"]
+        check("lab offers a source filter", bool(selectors))
+        if selectors:
+            options = list(selectors[0].options)
+            check("source filter lists the documents", len(options) > 1,
+                  str(len(options)))
+            if len(options) > 1:
+                selectors[0].set_value(options[1])
+                submits = [b for b in at.button if "Compare" in str(b.label)]
+                if submits:
+                    submits[0].click().run()
+                filtered = at.session_state.get("bundle")
+                check("source filter is stored in the bundle",
+                      filtered is not None and filtered.source == options[1],
+                      getattr(filtered, "source", "none"))
+                if filtered is not None:
+                    every = filtered.keyword + filtered.vector + filtered.hybrid
+                    check("filtered hits stay in the chosen source",
+                          bool(every) and all(h.source == options[1] for h in every),
+                          f"{len(every)} hits")
         body = markdown_text(at)
         check("result rows rendered", 'class="row"' in body)
         check("latency rendered", " ms</div>" in body or "ms" in body)
@@ -222,6 +242,68 @@ def main() -> int:
                           any(b.key == f"chat_{chat_id}" for b in at.button))
                     check("search offers a clear action",
                           any(b.key == "clear_history_search" for b in at.button))
+                    search_body = markdown_text(at)
+                    check("search reports the match count",
+                          "1 discussion match" in search_body,
+                          search_body[-160:])
+                    check("search highlights the matching words",
+                          "<mark>" in search_body)
+
+                rename = [t for t in at.text_input
+                          if t.key == f"rename_title_{chat_id}"]
+                check("manage offers a title field", bool(rename))
+                if rename:
+                    rename[0].set_value("Series B follow-up").run()
+                    at.button(key="rename_chat").click().run()
+                    check("rename is saved in Oracle",
+                          history.title(chat_id) == "Series B follow-up",
+                          history.title(chat_id))
+                check("manage offers a discussion download",
+                      any(d.key == "download_discussion" for d in at.download_button))
+                check("sidebar offers follow-up context",
+                      any(t.key == "follow_context" for t in at.toggle))
+
+                original_ask = rc.Agent.ask
+                seen: dict = {"context": [], "tokens": []}
+
+                def fake_ask(self, question, on_step=None, recursion_limit=25,
+                             use_cache=True, on_token=None, on_reset=None,
+                             context=None):
+                    seen["context"] = list(context or [])
+                    if on_reset:
+                        on_reset()
+                    for piece in ("Streamed ", "answer."):
+                        seen["tokens"].append(piece)
+                        if on_token:
+                            on_token(piece)
+                    return rc.Answer(
+                        text="Streamed answer.", model="fake",
+                        steps=[rc.Step("answer", "answer ready")],
+                        sources=[{"source": "test.md", "relevance": 1.0}],
+                        calls=0, elapsed=0.1,
+                    )
+
+                rc.Agent.ask = fake_ask  # type: ignore[assignment]
+                try:
+                    at.session_state["local_mode"] = False
+                    at.session_state["follow_context"] = True
+                    at.chat_input[0].set_value("And who funded them?").run()
+                    check("streaming UI renders without exception",
+                          not at.exception, str(at.exception))
+                    check("streamed answer is shown",
+                          "Streamed answer." in markdown_text(at))
+                    check("streamed tokens were delivered",
+                          "".join(seen["tokens"]) == "Streamed answer.",
+                          repr("".join(seen["tokens"])))
+                    check("follow-up context reached the agent",
+                          len(seen["context"]) >= 2, str(len(seen["context"])))
+                    saved = history.messages(chat_id)
+                    check("streamed answer is saved in Oracle",
+                          any(m["role"] == "assistant"
+                              and getattr(m.get("answer"), "text", "") == "Streamed answer."
+                              for m in saved))
+                finally:
+                    rc.Agent.ask = original_ask  # type: ignore[assignment]
 
                 second = AppTest.from_file(str(ROOT / "app.py"), default_timeout=240)
                 second.run()
