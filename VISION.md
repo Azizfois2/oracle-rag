@@ -197,7 +197,7 @@ beyond a few seconds.
 | Cache | `AnswerCache.key()`, `.get()`, `.put()`, `.stats()`, `.clear()` |
 | History | `ChatHistory.list()`, `.search()`, `.messages()`, `.title()`, `.export_markdown()`, `.append()`, `.rename()`, `.delete()`, `.clear()` |
 | MCP | `mcp_server.py`: `search_corpus`, `list_sources`, `corpus_info` (read-only, stdio) |
-| CLI | `ask.py "question"`, `--local`, `--json`, `--no-cache` |
+| CLI | `ask.py "question"`, `--local`, `--json`, `--no-cache`, `--chat`, `--no-history` |
 
 Types: `Hit` (key, source, text, score, method, detail) and `Answer`
 (text, model, steps, sources, calls, elapsed, cached). No dicts-of-dicts leaking
@@ -287,13 +287,22 @@ cache key includes that context. Discussions can be renamed and downloaded as
 Markdown. Search shows a count, highlights the matching words and pages past the
 first four. The Search lab filters every path to one source.
 
+**v1.9**
+An interactive terminal chat, `ask.py --chat`, over the same `Agent` and
+`ChatHistory` as the app. It restores the latest discussion, streams answers,
+keeps follow-up context, and supports `/history`, `/find`, `/open`, `/sources`,
+`/trace`, `/title` and `/delete`. `--no-history` keeps a test session in memory.
+No new dependency: Rich and prompt_toolkit were already installed.
+
 **Next**
 Date metadata in the corpus (the current schema stores source only), a larger and
 more varied labelled set, multi-collection support.
 
 **Later**
 Longer discussions with summarised memory, inline citation links, and a shareable
-static report.
+static report. A full-screen Textual TUI only if the terminal chat proves it
+needs panes and mouse support; it would add a dependency and a second rendering
+surface.
 
 ---
 
@@ -312,6 +321,7 @@ static report.
 - [x] A word from a saved discussion finds that thread from the sidebar.
 - [x] A saved discussion can be renamed and downloaded with its sources.
 - [x] The Search lab can restrict every retrieval path to one source.
+- [x] `ask.py --chat` restores a saved discussion, streams an answer, and keeps context.
 - [x] An MCP client can list three tools and search the corpus over stdio.
 - [x] `python tests/smoke_test.py` passes without spending API quota.
 - [x] No secret in git history; `.env` and `data/` ignored.
@@ -343,3 +353,4 @@ static report.
 | **Follow-up context as messages, not a rewritten prompt** | The graph already accepts a message list, so earlier turns are sent as normal user/assistant messages. The prompt stays one constant, and the CLI keeps asking standalone questions. Only the last six turns are sent, capped per turn, so retrieval still has room. The cache key includes them. |
 | **Source filter in the retrieval SQL, not after ranking** | Filtering after `FETCH APPROX` would silently shrink the candidate pool and change what each path can return. The predicate sits inside every query, so keyword, vector, hybrid and rerank all see the same one-document corpus. |
 | **Markdown export from the stored answer, not a second renderer** | The export is built by `ChatHistory` from the same rows the UI restores, so it carries the same text, sources and trace. No separate template can drift from what the screen shows. |
+| **Interactive terminal chat, not a full-screen TUI** | `ask.py --chat` reuses `Agent`, `ChatHistory` and the streaming callbacks, so it adds no SQL, no prompt text and no dependency. A Textual TUI would duplicate chat, history, search and settings in a second rendering surface, and `textual` is not installed. The terminal chat covers streaming, follow-ups, saved history and search; a TUI can wait until panes and mouse support are actually needed. |

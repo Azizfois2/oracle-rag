@@ -37,11 +37,34 @@ Then open <http://localhost:8501>.
 %USERPROFILE%\rag-venv\Scripts\python.exe ask.py "Which company raised a Series B?"
 %USERPROFILE%\rag-venv\Scripts\python.exe ask.py --local "hybrid search"
 %USERPROFILE%\rag-venv\Scripts\python.exe ask.py --json "Who partnered with NVIDIA?" > answer.json
+%USERPROFILE%\rag-venv\Scripts\python.exe ask.py --chat
 ```
 
 `--local` prints the top hybrid hits and spends no quota. `--no-cache` forces a
 fresh model run. The command exits 3 when no model is usable, so a script can
 fall back to local mode.
+
+`--chat` opens an interactive terminal session. It uses the same `Agent` and
+`ChatHistory` as the app, so a discussion started here appears in the Streamlit
+sidebar and can be reopened there. Answers stream in, follow-up context is on,
+and a discussion is saved after every turn. `/help` lists the commands:
+
+| Command | What it does |
+|---|---|
+| `/local` / `/remote` | switch between retrieval only and the Gemini agent |
+| `/new` | start a fresh discussion |
+| `/history` | list the ten most recent discussions |
+| `/open N` | reopen discussion N from that list |
+| `/find words` | search saved questions and answers |
+| `/sources` | sources of the last answer |
+| `/trace` | trace of the last answer |
+| `/title [name]` | show or rename this discussion |
+| `/delete` | delete this discussion, twice to confirm |
+| `/quit` | leave the chat |
+
+`--chat --local` runs the session with no model and no quota. `--no-history`
+keeps the session in memory only, so a quick test leaves no rows behind.
+`--steps` prints the trace after each answer. `--json` stays one-shot only.
 
 ---
 
@@ -257,7 +280,7 @@ oracle-rag/
   quality/run_eval.py     hit@k / MRR harness (CLI + used by the Quality tab)
   tests/smoke_test.py     engine tests, spend zero API quota
   tests/test_app.py       headless render + live search via streamlit.testing
-  tests/test_cli.py       ask.py local mode, no quota
+  tests/test_cli.py       ask.py one-shot and interactive chat, no quota
   tests/test_mcp.py       MCP server over real stdio, no quota
   tests/test_history.py   discussions persist and rebuild, scratch table only
   tests/test_db_down.py   the offline screen starts without a traceback
@@ -287,9 +310,11 @@ paths and the local reranker, score ranges, source filtering, ingest, export,
 import, search and delete round-trips, chunking, quota bookkeeping, and the
 streaming and follow-up contract with a fake graph. It writes only to a scratch
 source name and removes it afterwards. `--llm` adds one real agent question and
-is the only test that spends quota. `test_cli.py` runs `ask.py` in local mode, so
-it costs nothing. `test_mcp.py` starts the MCP server as a child process and
-calls every tool over stdio, so it also costs nothing. `test_history.py` uses the
+is the only test that spends quota. `test_cli.py` runs `ask.py` one-shot and
+drives the interactive chat with piped input and a fake agent, so it costs
+nothing and leaves no discussion behind. `test_mcp.py` starts the MCP server as
+a child process and calls every tool over stdio, so it also costs nothing.
+`test_history.py` uses the
 scratch table `RAG_CHAT_LOG_TEST`, checks persistence, search, rename and export,
 and drops it, so your real discussions are never touched. `test_app.py` also
 asks one local question, searches and renames it, checks the download button,
