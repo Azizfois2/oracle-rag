@@ -136,7 +136,7 @@ def search_corpus(query: str, mode: str = "hybrid", k: int = 5,
 
 @SERVER.tool(title="List sources", annotations=READ_ONLY)
 def list_sources() -> dict[str, Any]:
-    """List every indexed source with its chunk count and average size."""
+    """List every indexed source with its chunk count, average size and date."""
     with _LOCK:
         try:
             sources = _ENGINE.sources()

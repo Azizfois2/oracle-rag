@@ -9,6 +9,7 @@ retrieval form.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import sys
 from pathlib import Path
@@ -91,6 +92,37 @@ def main() -> int:
                     check("filtered hits stay in the chosen source",
                           bool(every) and all(h.source == options[1] for h in every),
                           f"{len(every)} hits")
+        dates = [d for d in at.date_input
+                 if d.key in ("lab_date_from", "lab_date_to")]
+        check("lab offers published date filters", len(dates) == 2,
+              str([d.key for d in at.date_input]))
+        if len(dates) == 2 and selectors:
+            query_fields = [t for t in at.text_input if t.label == "Query"]
+            if query_fields:
+                query_fields[0].set_value("hybrid search")
+            at.selectbox(key="lab_source").set_value("All sources")
+            by_key = {d.key: d for d in at.date_input}
+            by_key["lab_date_from"].set_value(dt.date(2026, 2, 14))
+            by_key["lab_date_to"].set_value(dt.date(2026, 2, 14))
+            submits = [b for b in at.button if "Compare" in str(b.label)]
+            if submits:
+                submits[0].click().run()
+            dated = at.session_state.get("bundle")
+            check("date filter is stored in the bundle",
+                  dated is not None and dated.date_from == "2026-02-14"
+                  and dated.date_to == "2026-02-14"
+                  and not dated.source,
+                  f"{getattr(dated, 'date_from', 'none')} to "
+                  f"{getattr(dated, 'date_to', 'none')}, "
+                  f"source {getattr(dated, 'source', 'none')}")
+            if dated is not None:
+                every = dated.keyword + dated.vector + dated.hybrid + dated.rerank
+                check("date filtered hits all fall on that day",
+                      bool(every) and all(h.published == "2026-02-14" for h in every),
+                      f"{len(every)} hits, "
+                      f"{sorted({h.published for h in every})}")
+            check("rows show the published date",
+                  "2026-02-14" in markdown_text(at))
         body = markdown_text(at)
         check("result rows rendered", 'class="row"' in body)
         check("latency rendered", " ms</div>" in body or "ms" in body)
@@ -100,6 +132,11 @@ def main() -> int:
         at.segmented_control[0].set_value(page).run()
         check(f"{page} renders without exception", not at.exception, str(at.exception))
         check(f"{page} content present", expected.lower() in markdown_text(at).lower(), expected)
+
+    at.segmented_control[0].set_value("Corpus").run()
+    frames = [frame.value for frame in at.dataframe]
+    check("corpus table shows published dates",
+          any("published" in frame.columns for frame in frames))
 
     print("\n== quality tab ==")
     at.segmented_control[0].set_value("Quality").run()
@@ -171,6 +208,49 @@ def main() -> int:
         at.session_state["eval"] = stale
         at.run()
         check("stale evaluation is rejected", "changed since this run" in alert_text(at))
+        if isinstance(result, dict):
+            at.session_state["eval"] = result
+            at.run()
+
+    body = markdown_text(at)
+    check("quality offers the answer gate",
+          "Answer quality" in body and "labelled answers" in body)
+    limits = [n for n in at.number_input if n.key == "answer_limit"]
+    check("answer gate has a run limit", bool(limits))
+    answer_runs = [b for b in at.button if b.key == "run_answer_check"]
+    check("answer gate offers a live check", bool(answer_runs))
+    if limits and answer_runs:
+        limits[0].set_value(1).run()
+        original_answer = rc.Agent.ask
+
+        def fake_answer(self, question, **kwargs):
+            return rc.Answer(
+                text="The corpus does not contain that information.",
+                model="fake", steps=[], sources=[], calls=0, elapsed=0.0,
+            )
+
+        rc.Agent.ask = fake_answer  # type: ignore[assignment]
+        try:
+            at.button(key="run_answer_check").click().run()
+            check("answer check runs without exception",
+                  not at.exception, str(at.exception))
+            summary = at.session_state.get("answer_check")
+            check("answer check stores a summary", isinstance(summary, dict),
+                  type(summary).__name__)
+            if isinstance(summary, dict):
+                check("answer check covers the chosen limit",
+                      summary.get("total") == 1, str(summary.get("total")))
+                check("answer check records its checks",
+                      set(summary.get("checks") or {})
+                      == {"source", "facts", "citations"},
+                      str(set(summary.get("checks") or {})))
+            check("answer check renders a pass rate",
+                  "cases passed" in markdown_text(at))
+            frames = [frame.value for frame in at.dataframe]
+            check("answer check renders a per-case table",
+                  any("failed checks" in frame.columns for frame in frames))
+        finally:
+            rc.Agent.ask = original_answer  # type: ignore[assignment]
 
     at.segmented_control[0].set_value("Health").run()
     health = markdown_text(at)
@@ -279,7 +359,13 @@ def main() -> int:
                     return rc.Answer(
                         text="Streamed answer.", model="fake",
                         steps=[rc.Step("answer", "answer ready")],
-                        sources=[{"source": "test.md", "relevance": 1.0}],
+                        sources=[{
+                            "source": "01_nvidia_ai_infrastructure.md",
+                            "relevance": 0.99,
+                            "snippet": "NVIDIA today announced a sweeping set of "
+                                       "infrastructure partnerships.",
+                            "published": "2026-03-10",
+                        }],
                         calls=0, elapsed=0.1,
                     )
 
@@ -292,6 +378,13 @@ def main() -> int:
                           not at.exception, str(at.exception))
                     check("streamed answer is shown",
                           "Streamed answer." in markdown_text(at))
+                    body = markdown_text(at)
+                    check("answer cites a clickable source",
+                          "Click one to read the passage" in body)
+                    check("citation shows the passage",
+                          "NVIDIA today announced" in body)
+                    check("citation shows the published date",
+                          "2026-03-10" in body)
                     check("streamed tokens were delivered",
                           "".join(seen["tokens"]) == "Streamed answer.",
                           repr("".join(seen["tokens"])))

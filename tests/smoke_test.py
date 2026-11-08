@@ -52,6 +52,21 @@ def main() -> int:
     check("chunk_text splits and respects size", len(chunks) > 1 and all(len(c) <= 420 for c in chunks),
           f"{len(chunks)} chunks, max {max(len(c) for c in chunks)} chars")
     check("chunk_text handles tiny input", rc.chunk_text("hello world") == ["hello world"])
+    check("published_from_text reads a dateline",
+          rc.published_from_text("**Santa Clara, CA - March 10, 2026**") == "2026-03-10",
+          rc.published_from_text("**Santa Clara, CA - March 10, 2026**"))
+    check("published_from_text ignores a bare year",
+          rc.published_from_text("In 2026 the market grew quickly.") == "")
+    tool_text = (
+        "[Source: a.md | Relevance: 0.85 | Published: 2026-02-14]\nbody text"
+        "\n\n---\n\n[Source: b.md | Relevance: 0.50]\nother text"
+    )
+    parsed = rc.sources_from_tool(tool_text)
+    check("tool sources carry a snippet and a date",
+          len(parsed) == 2 and parsed[0].get("snippet") == "body text"
+          and parsed[0].get("published") == "2026-02-14", str(parsed))
+    check("tool sources without a date still parse",
+          parsed[1].get("source") == "b.md" and "published" not in parsed[1])
 
     print("\n== quality questions ==")
     questions = load_questions()
@@ -205,6 +220,38 @@ def main() -> int:
               f"{len(reranked.rerank)} hits")
     else:
         check("source filter target exists", False, target)
+
+    lo, hi = engine.published_range()
+    check("published range known", bool(lo and hi), f"{lo} to {hi}")
+    day = "2026-02-14"
+    dated = engine.search_all("hybrid search", k=5, date_from=day, date_to=day)
+    dated_hits = dated.keyword + dated.vector + dated.hybrid
+    check("date filter is recorded",
+          dated.date_from == day and dated.date_to == day,
+          f"{dated.date_from} to {dated.date_to}")
+    check("date filter keeps every hit on that day",
+          bool(dated_hits) and all(h.published == day for h in dated_hits),
+          f"{len(dated_hits)} hits, dates "
+          f"{sorted({h.published for h in dated_hits})}")
+    dated_rerank = engine.search_all("hybrid search", k=5, rerank=True,
+                                     date_from=day, date_to=day)
+    check("date filter keeps reranked hits on that day",
+          bool(dated_rerank.rerank)
+          and all(h.published == day for h in dated_rerank.rerank),
+          f"{len(dated_rerank.rerank)} hits")
+    check("every hit carries its published date",
+          all(h.published for h in engine.vector_search("AI", k=5)))
+    check("source list carries published dates",
+          all(row.get("published") for row in engine.sources()))
+    check("source passages are available",
+          bool(engine.source_passages(target, limit=2)))
+    both = engine.search_all("hybrid", k=3, source=target,
+                             date_from=day, date_to=day)
+    combined = both.keyword + both.vector + both.hybrid
+    check("source and date filters combine",
+          bool(combined) and all(h.source == target and h.published == day
+                                 for h in combined),
+          f"{len(combined)} hits")
 
     # the weight slider must actually change the ranking
     zero = engine.hybrid_search("hybrid search", k=5, weight=0.0)

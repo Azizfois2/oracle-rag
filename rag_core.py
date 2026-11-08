@@ -199,6 +199,7 @@ class Hit:
     score: float
     method: str
     detail: dict[str, float] = field(default_factory=dict)
+    published: str = ""
 
     def snippet(self, limit: int = 240) -> str:
         flat = " ".join(self.text.split())
@@ -221,6 +222,8 @@ class SearchBundle:
     timings: dict[str, float]
     rerank: list[Hit] = field(default_factory=list)
     source: str = ""
+    date_from: str = ""
+    date_to: str = ""
 
     def all_keys(self) -> dict[str, set[str]]:
         return {
@@ -328,6 +331,57 @@ def _source(value: Any) -> str:
     return str(_meta(value).get("source") or "unknown")
 
 
+def _published(value: Any) -> str:
+    raw = _meta(value).get("published")
+    if not raw:
+        return ""
+    return str(raw)[:10]
+
+
+_MONTH_DATE = re.compile(
+    r"\b(January|February|March|April|May|June|July|August|September|"
+    r"October|November|December)\s+\d{1,2},\s+\d{4}\b",
+    re.IGNORECASE,
+)
+
+
+def published_from_text(text: str) -> str:
+    """Find the dateline in a news article and return an ISO date.
+
+    The sample corpus puts a city and a date on the second line, for example
+    ``**Santa Clara, CA - March 10, 2026**``. A month name with a day and a
+    year is specific enough to avoid matching a passing year in the body.
+    """
+    match = _MONTH_DATE.search(text or "")
+    if not match:
+        return ""
+    raw = " ".join(match.group(0).split()).title()
+    try:
+        return dt.datetime.strptime(raw, "%B %d, %Y").date().isoformat()
+    except ValueError:
+        return ""
+
+
+def _date_clause(date_from: str | None,
+                 date_to: str | None) -> tuple[list[str], dict[str, Any]]:
+    """SQL fragments for an inclusive published-date range.
+
+    Published dates are stored as ISO strings, so a lexical comparison is also
+    a date comparison. Rows without a date are excluded when a range is asked
+    for, which is the honest behaviour: an undated document cannot be shown to
+    fall inside the range.
+    """
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
+    if date_from:
+        clauses.append("JSON_VALUE(metadata, '$.published') >= :pub_from")
+        params["pub_from"] = str(date_from)[:10]
+    if date_to:
+        clauses.append("JSON_VALUE(metadata, '$.published') <= :pub_to")
+        params["pub_to"] = str(date_to)[:10]
+    return clauses, params
+
+
 def _terms(query: str, limit: int = 6) -> list[str]:
     """Words usable in an Oracle Text expression. Keeps it predictable."""
     words = re.findall(r"[A-Za-z0-9][A-Za-z0-9_+#.-]{1,}", query)
@@ -390,10 +444,36 @@ def message_text(message: Any) -> str:
 
 
 _SOURCE_LINE = re.compile(r"\[Source:\s*(?P<src>[^|\]]+?)\s*\|\s*Relevance:\s*(?P<score>[0-9.]+)\s*\]")
+_SOURCE_BLOCK = re.compile(
+    r"\[Source:\s*(?P<src>[^|\]]+?)\s*\|\s*Relevance:\s*(?P<score>[0-9.]+)"
+    r"(?:\s*\|\s*Published:\s*(?P<pub>[0-9-]+))?\s*\]\n"
+    r"(?P<text>.*?)(?=\n\n---\n\n|\Z)",
+    re.DOTALL,
+)
 
 
 def sources_from_tool(text: str) -> list[dict[str, Any]]:
-    out = []
+    """Read the tool's source blocks, including the passage and date.
+
+    The passage is kept so the UI can show the exact chunk behind a citation
+    without another query. Older output without a Published field still parses.
+    """
+    out: list[dict[str, Any]] = []
+    for match in _SOURCE_BLOCK.finditer(text or ""):
+        try:
+            score = float(match.group("score"))
+        except ValueError:
+            score = 0.0
+        item: dict[str, Any] = {
+            "source": match.group("src").strip(),
+            "relevance": score,
+            "snippet": " ".join(match.group("text").split())[:400],
+        }
+        if match.group("pub"):
+            item["published"] = match.group("pub").strip()
+        out.append(item)
+    if out:
+        return out
     for match in _SOURCE_LINE.finditer(text or ""):
         try:
             score = float(match.group("score"))
@@ -557,6 +637,7 @@ def hit_to_dict(hit: Hit) -> dict[str, Any]:
         "score": hit.score,
         "method": hit.method,
         "detail": dict(hit.detail),
+        "published": hit.published,
     }
 
 
@@ -568,6 +649,7 @@ def hit_from_dict(data: dict[str, Any]) -> Hit:
         score=float(data.get("score", 0.0) or 0.0),
         method=str(data.get("method", "hybrid")),
         detail={str(k): float(v) for k, v in (data.get("detail") or {}).items()},
+        published=str(data.get("published", "") or ""),
     )
 
 
@@ -1211,16 +1293,20 @@ class RagEngine:
                     score=round(shown, 4),
                     method="rerank",
                     detail={"hybrid": hit.score, "cross_encoder": round(score, 4)},
+                    published=hit.published,
                 )
             )
         ranked.sort(key=lambda h: (-h.score, h.key))
         return ranked[:k]
 
     def reranked_search(self, query: str, k: int = 5, weight: float = 0.6,
-                        source: str | None = None) -> list[Hit]:
+                        source: str | None = None,
+                        date_from: str | None = None,
+                        date_to: str | None = None) -> list[Hit]:
         """Hybrid retrieval over a wider pool, then cross-encoder reranking."""
         self._require_table()
-        pool = self.hybrid_search(query, max(k * 6, 30), weight, source)
+        pool = self.hybrid_search(query, max(k * 6, 30), weight, source,
+                                  date_from, date_to)
         return self.rerank_hits(query, pool, k)
 
     @property
@@ -1324,16 +1410,65 @@ class RagEngine:
         try:
             cur.execute(
                 f"SELECT JSON_VALUE(metadata, '$.source') AS src, COUNT(*) AS chunks, "
-                f"ROUND(AVG(DBMS_LOB.GETLENGTH(text))) AS avg_bytes "
+                f"ROUND(AVG(DBMS_LOB.GETLENGTH(text))) AS avg_bytes, "
+                f"MAX(JSON_VALUE(metadata, '$.published')) AS published "
                 f"FROM {self.s.table} GROUP BY JSON_VALUE(metadata, '$.source') "
                 f"ORDER BY src"
             )
             return [
-                {"source": str(src or "unknown"), "chunks": int(chunks), "avg_chars": int(avg or 0)}
-                for src, chunks, avg in cur.fetchall()
+                {
+                    "source": str(src or "unknown"),
+                    "chunks": int(chunks),
+                    "avg_chars": int(avg or 0),
+                    "published": str(published or ""),
+                }
+                for src, chunks, avg, published in cur.fetchall()
             ]
         finally:
             cur.close()
+
+    def published_range(self) -> tuple[str | None, str | None]:
+        """The earliest and latest published dates in the corpus."""
+        if not self.table_exists():
+            return None, None
+        cur = self.ensure().cursor()
+        try:
+            cur.execute(
+                f"SELECT MIN(JSON_VALUE(metadata, '$.published')), "
+                f"MAX(JSON_VALUE(metadata, '$.published')) FROM {self.s.table}"
+            )
+            row = cur.fetchone()
+            if not row:
+                return None, None
+            return (str(row[0]) if row[0] else None,
+                    str(row[1]) if row[1] else None)
+        finally:
+            cur.close()
+
+    def source_passages(self, source: str, limit: int = 3) -> list[Hit]:
+        """Chunks for one source, used to show the passage behind a citation."""
+        if not self.table_exists():
+            return []
+        name = str(source or "").strip()
+        if not name:
+            return []
+        size = max(1, min(200, int(limit)))
+        cur = self.ensure().cursor()
+        try:
+            cur.execute(
+                f"SELECT id, text, metadata FROM {self.s.table} "
+                f"WHERE JSON_VALUE(metadata, '$.source') = :s "
+                f"ORDER BY id FETCH FIRST {size} ROWS ONLY",
+                {"s": name},
+            )
+            rows = cur.fetchall()
+        finally:
+            cur.close()
+        return [
+            Hit(_as_key(rid), _source(meta), _as_text(text), 0.0, "source",
+                published=_published(meta))
+            for rid, text, meta in rows
+        ]
 
     def export_corpus(self) -> dict[str, Any]:
         """Every chunk as plain JSON, so a backup survives the volume.
@@ -1449,13 +1584,19 @@ class RagEngine:
         self._vec_cache[query] = vec
         return vec
 
-    def _vector_pool(self, query: str, pool: int, source: str | None = None) -> list[Hit]:
+    def _vector_pool(self, query: str, pool: int, source: str | None = None,
+                     date_from: str | None = None,
+                     date_to: str | None = None) -> list[Hit]:
         limit = max(1, int(pool))
         params: dict[str, Any] = {"q": self._query_vector(query)}
-        where = ""
+        clauses: list[str] = []
         if source:
-            where = "WHERE JSON_VALUE(metadata, '$.source') = :src"
+            clauses.append("JSON_VALUE(metadata, '$.source') = :src")
             params["src"] = source
+        date_clauses, date_params = _date_clause(date_from, date_to)
+        clauses.extend(date_clauses)
+        params.update(date_params)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         cur = self.ensure().cursor()
         try:
             cur.execute(
@@ -1476,17 +1617,23 @@ class RagEngine:
         hits = []
         for rid, text, meta, sim in rows:
             score = max(0.0, min(1.0, float(sim or 0.0)))
-            hits.append(Hit(_as_key(rid), _source(meta), _as_text(text), score, "vector"))
+            hits.append(Hit(_as_key(rid), _source(meta), _as_text(text), score,
+                            "vector", published=_published(meta)))
         hits.sort(key=lambda h: (-h.score, h.key))
         return hits
 
     def vector_search(self, query: str, k: int = 5,
-                      source: str | None = None) -> list[Hit]:
+                      source: str | None = None,
+                      date_from: str | None = None,
+                      date_to: str | None = None) -> list[Hit]:
         self._require_table()
-        return self._vector_pool(query, max(k * 4, 20), source)[:k]
+        return self._vector_pool(query, max(k * 4, 20), source,
+                                 date_from, date_to)[:k]
 
     def _keyword_pool(self, query: str, pool: int,
-                      source: str | None = None) -> list[Hit]:
+                      source: str | None = None,
+                      date_from: str | None = None,
+                      date_to: str | None = None) -> list[Hit]:
         terms = _terms(query)
         if not terms:
             return []
@@ -1496,6 +1643,10 @@ class RagEngine:
         if source:
             where += " AND JSON_VALUE(metadata, '$.source') = :src"
             params["src"] = source
+        date_clauses, date_params = _date_clause(date_from, date_to)
+        if date_clauses:
+            where += " AND " + " AND ".join(date_clauses)
+            params.update(date_params)
         cur = self.ensure().cursor()
         rows: list[tuple[Any, Any, Any, float]] = []
         try:
@@ -1515,7 +1666,8 @@ class RagEngine:
             except oracledb.Error:
                 # Oracle Text refused the expression (or the index is missing).
                 # Fall back to a substring scan so the keyword column never lies.
-                rows = self._keyword_fallback(cur, terms, pool, source)
+                rows = self._keyword_fallback(cur, terms, pool, source,
+                                              date_from, date_to)
         finally:
             cur.close()
 
@@ -1523,14 +1675,18 @@ class RagEngine:
             return []
         best = max(r[3] for r in rows) or 1.0
         hits = [
-            Hit(_as_key(rid), _source(meta), _as_text(text), round(min(1.0, score / best), 4), "keyword")
+            Hit(_as_key(rid), _source(meta), _as_text(text),
+                round(min(1.0, score / best), 4), "keyword",
+                published=_published(meta))
             for rid, text, meta, score in rows
         ]
         hits.sort(key=lambda h: (-h.score, h.key))
         return hits
 
     def _keyword_fallback(self, cur: Any, terms: Sequence[str], pool: int,
-                          source: str | None = None) -> list[tuple[Any, Any, Any, float]]:
+                          source: str | None = None,
+                          date_from: str | None = None,
+                          date_to: str | None = None) -> list[tuple[Any, Any, Any, float]]:
         found: dict[str, tuple[Any, Any, Any, float]] = {}
         for term in terms[:4]:
             params: dict[str, Any] = {"w": term.upper()}
@@ -1538,6 +1694,10 @@ class RagEngine:
             if source:
                 where += " AND JSON_VALUE(metadata, '$.source') = :src"
                 params["src"] = source
+            date_clauses, date_params = _date_clause(date_from, date_to)
+            if date_clauses:
+                where += " AND " + " AND ".join(date_clauses)
+                params.update(date_params)
             try:
                 cur.execute(
                     f"SELECT id, text, metadata FROM {self.s.table} "
@@ -1557,17 +1717,24 @@ class RagEngine:
         return list(found.values())
 
     def keyword_search(self, query: str, k: int = 5,
-                       source: str | None = None) -> list[Hit]:
+                       source: str | None = None,
+                       date_from: str | None = None,
+                       date_to: str | None = None) -> list[Hit]:
         self._require_table()
-        return self._keyword_pool(query, max(k * 4, 20), source)[:k]
+        return self._keyword_pool(query, max(k * 4, 20), source,
+                                  date_from, date_to)[:k]
 
     def hybrid_search(self, query: str, k: int = 5, weight: float = 0.6,
-                      source: str | None = None) -> list[Hit]:
+                      source: str | None = None,
+                      date_from: str | None = None,
+                      date_to: str | None = None) -> list[Hit]:
         self._require_table()
         weight = max(0.0, min(1.0, float(weight)))
         pool = max(k * 4, 20)
-        vec = {h.key: h for h in self._vector_pool(query, pool, source)}
-        kw = {h.key: h for h in self._keyword_pool(query, pool, source)}
+        vec = {h.key: h for h in self._vector_pool(query, pool, source,
+                                                   date_from, date_to)}
+        kw = {h.key: h for h in self._keyword_pool(query, pool, source,
+                                                   date_from, date_to)}
 
         # Cosine similarity lives in a narrow band (~0.2-0.6 here) while keyword
         # scores are already 0-1, so a raw weighted sum would silently favour
@@ -1606,6 +1773,7 @@ class RagEngine:
                     score=round(score, 4),
                     method="hybrid",
                     detail={"vector": round(v_raw, 4), "keyword": round(k_raw, 4)},
+                    published=base.published,
                 )
             )
         fused.sort(key=lambda h: (-h.score, h.key))
@@ -1621,36 +1789,42 @@ class RagEngine:
             threading.Thread(target=self.warm, name="embed-warm", daemon=True).start()
 
     def search_all(self, query: str, k: int = 5, weight: float = 0.6,
-                   rerank: bool = False, source: str | None = None) -> SearchBundle:
+                   rerank: bool = False, source: str | None = None,
+                   date_from: str | None = None,
+                   date_to: str | None = None) -> SearchBundle:
         self._require_table()
         _ = self.embeddings          # never charge model loading to a search's latency
         self._query_vector(query)    # embed once; the three paths share the vector
         timings: dict[str, float] = {}
         only = str(source or "").strip() or None
+        since = str(date_from or "").strip()[:10] or None
+        until = str(date_to or "").strip()[:10] or None
 
         start = time.perf_counter()
-        keyword = self.keyword_search(query, k, only)
+        keyword = self.keyword_search(query, k, only, since, until)
         timings["keyword"] = (time.perf_counter() - start) * 1000
 
         start = time.perf_counter()
-        vector = self.vector_search(query, k, only)
+        vector = self.vector_search(query, k, only, since, until)
         timings["vector"] = (time.perf_counter() - start) * 1000
 
         start = time.perf_counter()
-        hybrid = self.hybrid_search(query, k, weight, only)
+        hybrid = self.hybrid_search(query, k, weight, only, since, until)
         timings["hybrid"] = (time.perf_counter() - start) * 1000
 
         reranked: list[Hit] = []
         if rerank:
             _ = self.reranker        # load once, outside the timed rerank stage
             start = time.perf_counter()
-            candidates = self.hybrid_search(query, max(k * 6, 30), weight, only)
+            candidates = self.hybrid_search(query, max(k * 6, 30), weight, only,
+                                            since, until)
             reranked = self.rerank_hits(query, candidates, k)
             timings["rerank"] = (time.perf_counter() - start) * 1000
 
         return SearchBundle(query=query, keyword=keyword, vector=vector,
                             hybrid=hybrid, timings=timings, rerank=reranked,
-                            source=only or "")
+                            source=only or "", date_from=since or "",
+                            date_to=until or "")
 
     # -- corpus -------------------------------------------------------------
     def source_exists(self, source: str) -> bool:
@@ -1667,7 +1841,8 @@ class RagEngine:
             cur.close()
 
     def ingest(self, text: str, source: str, chunk_size: int = 900,
-               overlap: int = 120, replace: bool = False) -> dict[str, Any]:
+               overlap: int = 120, replace: bool = False,
+               metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         body = (text or "").strip()
         if not body:
             raise RagError("nothing to ingest: the text is empty")
@@ -1680,13 +1855,21 @@ class RagEngine:
         if not chunks:
             raise RagError("nothing to ingest: chunking produced no text")
 
+        extra = {k: v for k, v in (metadata or {}).items()
+                 if k not in ("source", "__orcl_internal_doc_id") and v is not None}
+        published = str(extra.get("published") or published_from_text(body))[:10]
+        if published:
+            extra["published"] = published
+
         from langchain_core.documents import Document
 
-        docs = [Document(page_content=c, metadata={"source": source}) for c in chunks]
+        docs = [Document(page_content=c, metadata={"source": source, **extra})
+                for c in chunks]
         self.vector_store.add_documents(docs)
         self.ensure().commit()
         self._vec_cache.clear()
-        return {"source": source, "chunks": len(chunks), "chars": len(body)}
+        return {"source": source, "chunks": len(chunks), "chars": len(body),
+                "published": published}
 
     def delete_source(self, source: str) -> int:
         if not self.table_exists():
@@ -1811,6 +1994,14 @@ class _CountCalls(BaseCallbackHandler):
         self.quota.record(self.model)
 
 
+def _source_block(hit: Hit) -> str:
+    """One tool result block: header, then the passage the model may cite."""
+    header = f"[Source: {hit.source} | Relevance: {hit.score:.2f}"
+    if hit.published:
+        header += f" | Published: {hit.published}"
+    return f"{header}]\n{hit.text}"
+
+
 def build_search_tool(engine: RagEngine) -> Any:
     from langchain_core.tools import tool
 
@@ -1823,7 +2014,7 @@ def build_search_tool(engine: RagEngine) -> Any:
         if not hits:
             return "No relevant documents found."
         return "\n\n---\n\n".join(
-            f"[Source: {h.source} | Relevance: {h.score:.2f}]\n{h.text}" for h in hits
+            _source_block(h) for h in hits
         )
 
     return search_tech_news
@@ -2119,8 +2310,21 @@ def _dedupe_sources(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     for item in items:
         src = str(item.get("source", "unknown"))
         score = float(item.get("relevance", 0.0) or 0.0)
-        if src not in seen or score > seen[src]["relevance"]:
-            seen[src] = {"source": src, "relevance": round(score, 3)}
+        candidate = {
+            "source": src,
+            "relevance": round(score, 3),
+        }
+        for key in ("snippet", "published"):
+            if item.get(key):
+                candidate[key] = item[key]
+        previous = seen.get(src)
+        if previous is None or score > float(previous.get("relevance", 0.0) or 0.0):
+            seen[src] = candidate
+        elif previous is not None:
+            # Keep a snippet even when a higher score was recorded without one.
+            for key in ("snippet", "published"):
+                if candidate.get(key) and not previous.get(key):
+                    previous[key] = candidate[key]
     return sorted(seen.values(), key=lambda s: s["relevance"], reverse=True)
 
 

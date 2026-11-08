@@ -255,9 +255,9 @@ is no longer comparable: run Quality again.
 | Surface | What it is for |
 |---|---|
 | **Ask** | ReAct agent over the corpus, with the answer streaming in and a trace: tool calls, queries, sources, API calls, latency. Follow-up context carries the last few turns. Local mode = no LLM, zero quota. A repeated question is served from cache with no call at all. Discussions are saved in Oracle, restored on open, searchable, renameable and downloadable. |
-| **Search lab** | The same query through keyword, vector, hybrid and the local reranker at once - scores, snippets, overlap. Filter every path to one source. The proof that each step earns its keep. |
-| **Corpus** | Source list, chunk counts, ingest text/files, delete a source, rebuild indexes. |
-| **Quality** | 40 labelled questions (single, cross-document, unanswerable) → hit@k and MRR per retrieval path, including the reranker, saved per run. |
+| **Search lab** | The same query through keyword, vector, hybrid and the local reranker at once - scores, snippets, overlap. Filter every path to one source or one published-date range. The proof that each step earns its keep. |
+| **Corpus** | Source list with published dates, chunk counts, ingest text/files, delete a source, rebuild indexes. |
+| **Quality** | 40 labelled retrieval questions (single, cross-document, unanswerable) with hit@k and MRR per path, plus 28 labelled answer cases that check expected sources, expected facts, refusals and invented citations. Retrieval runs cost no quota; the live answer check is opt-in. |
 | **Health** | Database version, container state, indexes, embedding model, key presence, per-model quota with reset time, answer cache, discussion history, corpus backup. |
 
 ---
@@ -274,17 +274,23 @@ oracle-rag/
   notebook/               the original lab notebook (canonical copy)
   tools/restore_corpus.py re-ingest the ten samples from the notebook
   tools/rechunk_corpus.py split those samples into 46 retrieval chunks
+  tools/add_published_dates.py add article dates to an existing corpus, in place
   tools/export_corpus.py  write the corpus to one JSON file
   tools/import_corpus.py  restore that file, re-embedding the text
-  quality/questions.json  40 labelled questions: single, cross, unanswerable
+  quality/questions.json  40 labelled retrieval questions
   quality/run_eval.py     hit@k / MRR harness (CLI + used by the Quality tab)
+  quality/answers.json    28 labelled answer cases: source, facts, refusal
+  quality/answer_eval.py  zero-quota scoring for answer quality
+  quality/check_answers.py live answer check, saved to data/answers-last.json
   tests/smoke_test.py     engine tests, spend zero API quota
   tests/test_app.py       headless render + live search via streamlit.testing
+  tests/test_answers.py   answer gate scoring with fake answers, no quota
   tests/test_cli.py       ask.py one-shot and interactive chat, no quota
   tests/test_mcp.py       MCP server over real stdio, no quota
   tests/test_history.py   discussions persist and rebuild, scratch table only
   tests/test_db_down.py   the offline screen starts without a traceback
-  data/                   quota.json, model.json, answers.json, eval-last.json (gitignored)
+  data/                   quota.json, model.json, answers.json, eval-last.json,
+                          answers-last.json (gitignored)
   logs/                   launcher logs (gitignored)
 ```
 
@@ -297,8 +303,10 @@ needs data, `rag_core.py` grows a function.
 
 ```bat
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\smoke_test.py
-%USERPROFILE%\rag-venv\Scripts\python.exe tests\smoke_test.py --llm   REM spends 2-6 API calls
+REM the next one spends 2-6 API calls
+%USERPROFILE%\rag-venv\Scripts\python.exe tests\smoke_test.py --llm
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\test_app.py
+%USERPROFILE%\rag-venv\Scripts\python.exe tests\test_answers.py
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\test_cli.py
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\test_mcp.py
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\test_history.py
@@ -306,11 +314,14 @@ needs data, `rag_core.py` grows a function.
 ```
 
 `smoke_test.py` covers: settings discovery, connect, stats, the four retrieval
-paths and the local reranker, score ranges, source filtering, ingest, export,
-import, search and delete round-trips, chunking, quota bookkeeping, and the
-streaming and follow-up contract with a fake graph. It writes only to a scratch
-source name and removes it afterwards. `--llm` adds one real agent question and
-is the only test that spends quota. `test_cli.py` runs `ask.py` one-shot and
+paths and the local reranker, score ranges, source and published-date filtering,
+ingest, export, import, search and delete round-trips, chunking, quota
+bookkeeping, and the streaming and follow-up contract with a fake graph. It
+writes only to a scratch source name and removes it afterwards. `--llm` adds one
+real agent question and is the only test that spends quota. `test_answers.py`
+scores fake answers against the 28 labelled cases, including missing facts,
+missing sources, refusals and invented citations, so the gate itself costs
+nothing. `test_cli.py` runs `ask.py` one-shot and
 drives the interactive chat with piped input and a fake agent, so it costs
 nothing and leaves no discussion behind. `test_mcp.py` starts the MCP server as
 a child process and calls every tool over stdio, so it also costs nothing.
@@ -318,9 +329,9 @@ a child process and calls every tool over stdio, so it also costs nothing.
 scratch table `RAG_CHAT_LOG_TEST`, checks persistence, search, rename and export,
 and drops it, so your real discussions are never touched. `test_app.py` also
 asks one local question, searches and renames it, checks the download button,
-drives a fake streaming answer with follow-up context, reopens the app in a
-second session, checks that the discussion came back, and deletes that test
-thread.
+drives a fake streaming answer with follow-up context and a clickable citation,
+runs the answer gate with a fake model, reopens the app in a second session,
+checks that the discussion came back, and deletes that test thread.
 
 ---
 
@@ -336,7 +347,10 @@ thread.
 `w` is the slider in the Search lab (0 = keyword only, 1 = vector only).
 At either extreme the ranking is exactly the pure path, not an approximation.
 The source filter adds `JSON_VALUE(metadata, '$.source') = :src` inside every
-query, so all four paths rank the same one-document corpus.
+query, so all four paths rank the same one-document corpus. The published-date
+filter adds `JSON_VALUE(metadata, '$.published') >= :pub_from` and the matching
+upper bound inside every query too. Rows without a date are left out when a
+range is set, because an undated document cannot be shown to fall inside it.
 Scores are computed in `rag_core.py` exactly as shown - copy the SQL and re-run it.
 
 The reranker is `cross-encoder/ms-marco-MiniLM-L-6-v2`, loaded on first use and
@@ -382,6 +396,53 @@ averages **0.43** (range 0.22-0.54), against **0.60** for answerable questions
 "I don't know" signal. Keyword scores are normalised per query, so the best match
 is always 1.00 and cannot be used as confidence. Reranked scores are normalised
 the same way and are also not confidence.
+
+---
+
+## Published dates, citations and the answer gate
+
+The ten sample articles carry a dateline. `published_from_text()` reads it once
+and stores an ISO date such as `2026-02-14` in the chunk metadata. An existing
+corpus can gain the dates without re-embedding:
+
+```bat
+REM dry run, writes nothing
+%USERPROFILE%\rag-venv\Scripts\python.exe tools\add_published_dates.py
+REM patch the metadata in place
+%USERPROFILE%\rag-venv\Scripts\python.exe tools\add_published_dates.py --apply
+```
+
+The tool patches only the metadata column with `JSON_MERGEPATCH`, so ids,
+embeddings and the corpus fingerprint stay the same. It is safe to run twice.
+New ingests also read a dateline automatically, and `tools/restore_corpus.py`
+and `tools/rechunk_corpus.py` carry the date forward.
+
+Every answer keeps the retrieval tool's source blocks, including the passage
+that was returned and its published date. In the Ask page each source is a
+clickable expander: open it to read the passage behind the citation. If an older
+saved answer has no stored passage, the app reads the first chunks for that
+source from Oracle instead.
+
+The answer gate is separate from the retrieval benchmark. `quality/answers.json`
+holds 28 labelled cases: 19 single-document, 4 cross-document and 5
+unanswerable. A case passes only when every expected source is cited, every
+expected fact appears in the text, unanswerable questions are refused, and every
+citation names a real document. Scoring is local and costs no quota:
+
+```bat
+%USERPROFILE%\rag-venv\Scripts\python.exe tests\test_answers.py
+```
+
+A live run asks Gemini, so it is opt-in and small by default:
+
+```bat
+%USERPROFILE%\rag-venv\Scripts\python.exe quality\check_answers.py --dry-run
+%USERPROFILE%\rag-venv\Scripts\python.exe quality\check_answers.py --limit 5
+%USERPROFILE%\rag-venv\Scripts\python.exe quality\check_answers.py --all
+```
+
+The Quality tab offers the same check with a questions-per-run limit. Each run
+is saved to `data/answers-last.json`, which is gitignored and contains no key.
 
 ---
 

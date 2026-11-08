@@ -23,6 +23,8 @@ import pandas as pd
 import streamlit as st
 
 import rag_core as rc
+from quality.answer_eval import load_cases as load_answer_cases
+from quality.answer_eval import score_all as score_answers
 from quality.run_eval import (evaluate, load_last, load_questions, question_type,
                               questions_digest, save_run)
 
@@ -115,6 +117,8 @@ div[data-baseweb="tab-border"]{ background:var(--line); }
 .rank{ font-family:"IBM Plex Mono",monospace; font-size:.72rem; font-weight:500; width:.9rem; }
 .src{ font-family:"IBM Plex Mono",monospace; font-size:.7rem; color:var(--ink2);
   flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.date{ font-family:"IBM Plex Mono",monospace; font-size:.62rem; color:var(--ink3);
+  white-space:nowrap; }
 .score{ font-family:"IBM Plex Mono",monospace; font-size:.73rem; font-variant-numeric:tabular-nums; }
 .track{ height:2px; background:var(--line); margin:.35rem 0 .4rem; }
 .track>i{ display:block; height:100%; }
@@ -183,11 +187,14 @@ def row_html(rank: int, hit: rc.Hit, method: str, tags: tuple[str, ...] = ()) ->
     if tags:
         inner = "".join(f'<span class="tag">{esc(t)}</span>' for t in tags)
         tags_block = f'<div class="tags">{inner}</div>'
+    date_block = (f'<span class="date">{esc(hit.published)}</span>'
+                  if hit.published else "")
     return (
         f'<div class="row">'
         f'<div class="row-top">'
         f'<span class="rank {css}-t">{rank}</span>'
         f'<span class="src">{esc(hit.source)}</span>'
+        f'{date_block}'
         f'<span class="score {css}-t">{hit.score:.3f}</span>'
         f"</div>"
         f'<div class="track"><i class="{css}"></i></div>'
@@ -534,7 +541,8 @@ SUGGESTIONS = (
 )
 
 
-def render_answer_body(answer: rc.Answer, show_text: bool = True) -> None:
+def render_answer_body(answer: rc.Answer, show_text: bool = True,
+                       engine: rc.RagEngine | None = None) -> None:
     if answer.local:
         st.markdown('<p class="small">Retrieval only. No model was called.</p>',
                     unsafe_allow_html=True)
@@ -568,19 +576,45 @@ def render_answer_body(answer: rc.Answer, show_text: bool = True) -> None:
                 f'<span style="color:var(--ink3)"> · {esc(glyph)}</span>{detail}</div>',
                 unsafe_allow_html=True,
             )
-        if answer.sources:
-            st.markdown('<p class="small">Sources returned by the retrieval tool</p>',
-                        unsafe_allow_html=True)
-            st.dataframe(
-                pd.DataFrame(answer.sources).rename(
-                    columns={"source": "source", "relevance": "relevance"}),
-                hide_index=True,
-                column_config={
-                    "source": st.column_config.TextColumn("source", width="large"),
-                    "relevance": st.column_config.ProgressColumn(
-                        "relevance", min_value=0.0, max_value=1.0, format="%.3f"),
-                },
-            )
+
+    if answer.sources:
+        st.markdown(
+            '<p class="small">Sources returned by the retrieval tool. '
+            "Click one to read the passage behind it.</p>",
+            unsafe_allow_html=True,
+        )
+        for item in answer.sources:
+            if not isinstance(item, dict):
+                item = {"source": str(item)}
+            name = str(item.get("source") or "unknown")
+            published = str(item.get("published") or "")
+            relevance = float(item.get("relevance", 0.0) or 0.0)
+            label = f"{name} · {published}" if published else name
+            with st.expander(label):
+                meta = f"Relevance {relevance:.3f}"
+                meta += f" · published {published}" if published else " · undated"
+                st.markdown(f'<p class="small">{esc(meta)}</p>',
+                            unsafe_allow_html=True)
+                snippet = str(item.get("snippet") or "").strip()
+                passages: list[rc.Hit] = []
+                if not snippet and engine is not None:
+                    try:
+                        passages = engine.source_passages(name, limit=3)
+                    except rc.RagError:
+                        passages = []
+                if snippet:
+                    st.markdown(snippet)
+                elif passages:
+                    for index, hit in enumerate(passages):
+                        if index:
+                            st.divider()
+                        st.markdown(hit.text)
+                else:
+                    st.markdown(
+                        '<p class="small">No passage stored for this source. '
+                        "Open the Corpus tab to read the document.</p>",
+                        unsafe_allow_html=True,
+                    )
 
 
 def answer_flow(question: str, settings: rc.Settings, agent: rc.Agent,
@@ -647,7 +681,7 @@ def answer_flow(question: str, settings: rc.Settings, agent: rc.Agent,
 
         if not local:
             stream_box.markdown(answer.text)
-        render_answer_body(answer, show_text=local)
+        render_answer_body(answer, show_text=local, engine=agent.engine)
     st.session_state.chat.append({"role": "assistant", "answer": answer})
     save_message(history, "assistant", answer.text, answer=answer)
 
@@ -686,7 +720,7 @@ def tab_ask(settings: rc.Settings, agent: rc.Agent, history: rc.ChatHistory,
                 st.error(item["content"])
         else:
             with st.chat_message("assistant"):
-                render_answer_body(item["answer"])
+                render_answer_body(item["answer"], engine=agent.engine)
 
     queued = st.session_state.pop("pending", None)
     if queued:
@@ -703,8 +737,12 @@ def tab_ask(settings: rc.Settings, agent: rc.Agent, history: rc.ChatHistory,
 def tab_lab(engine: rc.RagEngine) -> None:
     try:
         names = [row["source"] for row in engine.sources()]
+        lo, hi = engine.published_range()
     except rc.RagError:
         names = []
+        lo, hi = None, None
+    lo_date = dt.date.fromisoformat(lo) if lo else None
+    hi_date = dt.date.fromisoformat(hi) if hi else None
     options = ["All sources"] + names
     if st.session_state.get("lab_source") not in options:
         st.session_state["lab_source"] = "All sources"
@@ -719,8 +757,25 @@ def tab_lab(engine: rc.RagEngine) -> None:
             "Source",
             options,
             key="lab_source",
-            help="Filter every retrieval path to one document. This corpus stores "
-                 "source metadata only; date filters need a corpus schema change.",
+            help="Filter every retrieval path to one document.",
+        )
+        date_left, date_right = st.columns(2)
+        date_from = date_left.date_input(
+            "Published from",
+            value=None,
+            min_value=lo_date,
+            max_value=hi_date,
+            key="lab_date_from",
+            help="Inclusive. Documents without a published date are left out "
+                 "when a range is set.",
+        )
+        date_to = date_right.date_input(
+            "Published to",
+            value=None,
+            min_value=lo_date,
+            max_value=hi_date,
+            key="lab_date_to",
+            help="Inclusive. Leave both dates empty to search the whole corpus.",
         )
         left, middle, right = st.columns([1, 1.6, 1])
         k = left.slider("Results per path", 3, 10, 5)
@@ -732,13 +787,18 @@ def tab_lab(engine: rc.RagEngine) -> None:
         submitted = right.form_submit_button("Compare paths", type="primary")
 
     if submitted and query.strip():
+        if date_from and date_to and date_from > date_to:
+            st.warning("The start date is after the end date. Swap them and try again.")
+            return
         st.session_state.lab_query = query.strip()
         only = None if source == "All sources" else source
+        since = date_from.isoformat() if date_from else None
+        until = date_to.isoformat() if date_to else None
         with st.spinner("Querying keyword, vector, hybrid and the reranker"):
             try:
                 st.session_state.bundle = engine.search_all(
                     query.strip(), k=int(k), weight=float(weight), rerank=True,
-                    source=only)
+                    source=only, date_from=since, date_to=until)
                 st.session_state.bundle_at = time.strftime("%H:%M:%S")
             except rc.RagError as exc:
                 st.error(str(exc))
@@ -748,6 +808,7 @@ def tab_lab(engine: rc.RagEngine) -> None:
     if bundle is None:
         st.markdown(
             '<p class="small">One query, four retrieval paths, side by side. '
+            "Filter by source or published date; both apply to every path. "
             "The reranker is a local model, so it costs no API quota.</p>",
             unsafe_allow_html=True,
         )
@@ -757,6 +818,9 @@ def tab_lab(engine: rc.RagEngine) -> None:
     shared = bundle.consensus()
     filter_note = (f' · source <span class="mono">{esc(bundle.source)}</span>'
                    if bundle.source else "")
+    if bundle.date_from or bundle.date_to:
+        span = f'{bundle.date_from or "start"} to {bundle.date_to or "latest"}'
+        filter_note += f' · published <span class="mono">{esc(span)}</span>'
     st.markdown(
         f'<p class="small"><span class="mono">{esc(bundle.query)}</span> · '
         f'{bundle.total} documents across the four paths · '
@@ -838,12 +902,14 @@ def tab_corpus(engine: rc.RagEngine, settings: rc.Settings) -> None:
     if sources:
         st.dataframe(
             pd.DataFrame(sources).rename(
-                columns={"source": "source", "chunks": "chunks", "avg_chars": "avg chars"}),
+                columns={"source": "source", "chunks": "chunks",
+                         "avg_chars": "avg chars", "published": "published"}),
             hide_index=True,
             column_config={
                 "source": st.column_config.TextColumn("source", width="large"),
                 "chunks": st.column_config.NumberColumn("chunks", width="small"),
                 "avg chars": st.column_config.NumberColumn("avg chars", width="small"),
+                "published": st.column_config.TextColumn("published", width="small"),
             },
         )
     else:
@@ -883,7 +949,8 @@ def tab_corpus(engine: rc.RagEngine, settings: rc.Settings) -> None:
                 try:
                     result = engine.ingest(
                         body, source_name, chunk_size=int(size), replace=replace)
-                    added.append(f'{result["source"]} ({result["chunks"]} chunks)')
+                    stamp = result.get("published") or "undated"
+                    added.append(f'{result["source"]} ({result["chunks"]} chunks, {stamp})')
                 except rc.RagError as exc:
                     failed.append(f"{source_name}: {exc}")
             if added:
@@ -922,7 +989,7 @@ def tab_corpus(engine: rc.RagEngine, settings: rc.Settings) -> None:
 # --------------------------------------------------------------------------- #
 # quality
 # --------------------------------------------------------------------------- #
-def tab_quality(engine: rc.RagEngine) -> None:
+def tab_quality(engine: rc.RagEngine, agent: rc.Agent) -> None:
     questions = load_questions()
     counts = {kind: sum(1 for item in questions if question_type(item) == kind)
               for kind in ("single", "cross", "unanswerable")}
@@ -1068,6 +1135,123 @@ def tab_quality(engine: rc.RagEngine) -> None:
         })
     with st.expander("Per question"):
         st.dataframe(pd.DataFrame(rows), hide_index=True)
+
+    answer_cases = load_answer_cases()
+    answer_counts = {kind: sum(1 for item in answer_cases
+                               if item.get("type") == kind)
+                     for kind in ("single", "cross", "unanswerable")}
+    st.markdown('<h3 style="margin-top:1.4rem">Answer quality</h3>',
+                unsafe_allow_html=True)
+    st.markdown(
+        f'<p class="small">{len(answer_cases)} labelled answers: '
+        f'{answer_counts["single"]} single-document, '
+        f'{answer_counts["cross"]} cross-document, '
+        f'{answer_counts["unanswerable"]} unanswerable. A case passes when every '
+        "expected source is cited, every expected fact appears in the answer, "
+        "unanswerable questions are refused, and every citation names a real "
+        "document. The scoring itself is local; a live run calls Gemini once "
+        "per question and may use more than one request.</p>",
+        unsafe_allow_html=True,
+    )
+    with st.expander("Cases"):
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "question": item.get("question"),
+                    "set": item.get("type"),
+                    "expected source": ", ".join(item.get("expect_sources") or [])
+                                       or "none",
+                    "expected facts": ", ".join(item.get("expect_facts") or [])
+                                      or "refuse",
+                }
+                for item in answer_cases
+            ]),
+            hide_index=True,
+        )
+
+    left, right = st.columns([1, 2])
+    answer_limit = left.number_input(
+        "Questions per run", 1, len(answer_cases),
+        min(5, len(answer_cases)), key="answer_limit",
+        help="The free tier allows about 20 requests per day per model. "
+             "Start small.",
+    )
+    right.markdown("<div style='height:1.55rem'></div>", unsafe_allow_html=True)
+    run_answers = right.button("Check answers", type="primary",
+                               key="run_answer_check")
+
+    if run_answers:
+        selected = answer_cases[: int(answer_limit)]
+        corpus = [row["source"] for row in engine.sources()]
+        answers: list[rc.Answer] = []
+        completed: list[dict] = []
+        progress = st.progress(0.0, text="Starting the answer check")
+        stopped = ""
+        for index, case in enumerate(selected, start=1):
+            progress.progress((index - 1) / len(selected),
+                              text=f"Question {index} of {len(selected)}")
+            try:
+                answer = agent.ask(str(case.get("question") or ""))
+            except rc.QuotaExhausted as exc:
+                stopped = f"Quota stopped the run after {len(answers)} answers: {exc}"
+                break
+            except rc.RagError as exc:
+                stopped = f"The run stopped after {len(answers)} answers: {exc}"
+                break
+            answers.append(answer)
+            completed.append(case)
+        progress.empty()
+        if stopped:
+            st.warning(stopped)
+        if answers:
+            st.session_state.answer_check = score_answers(completed, answers, corpus)
+            st.session_state.answer_check_at = time.strftime("%H:%M:%S")
+        else:
+            st.warning("No answers completed, so there is nothing to score.")
+
+    answer_summary = st.session_state.get("answer_check")
+    if answer_summary:
+        at = st.session_state.get("answer_check_at", "")
+        passed = int(answer_summary.get("passed", 0))
+        total = int(answer_summary.get("total", 0))
+        rate = float(answer_summary.get("score", 0.0)) * 100
+        st.markdown(
+            f'<p class="small"><b>{passed}/{total}</b> cases passed '
+            f'({rate:.0f}%) · run at {esc(at)}</p>',
+            unsafe_allow_html=True,
+        )
+        checks = [
+            {
+                "check": name,
+                "passed": bucket["passed"],
+                "total": bucket["total"],
+                "rate": bucket["passed"] / bucket["total"] if bucket["total"] else 0.0,
+            }
+            for name, bucket in (answer_summary.get("checks") or {}).items()
+        ]
+        st.dataframe(
+            pd.DataFrame(checks), hide_index=True,
+            column_config={
+                "check": st.column_config.TextColumn("check", width="small"),
+                "passed": st.column_config.NumberColumn("passed", width="small"),
+                "total": st.column_config.NumberColumn("total", width="small"),
+                "rate": st.column_config.ProgressColumn(
+                    "rate", min_value=0.0, max_value=1.0, format="%.2f"),
+            },
+        )
+        case_rows = []
+        for item in answer_summary.get("cases") or []:
+            failed = ", ".join(check["name"] for check in item.get("checks") or []
+                               if not check.get("passed")) or "none"
+            case_rows.append({
+                "question": item.get("question"),
+                "set": item.get("type"),
+                "result": "pass" if item.get("passed") else "fail",
+                "failed checks": failed,
+                "sources": ", ".join(item.get("sources") or []) or "none",
+            })
+        with st.expander("Per case", expanded=passed < total):
+            st.dataframe(pd.DataFrame(case_rows), hide_index=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -1348,7 +1532,7 @@ def main() -> None:
     elif page == "Corpus":
         tab_corpus(engine, settings)
     elif page == "Quality":
-        tab_quality(engine)
+        tab_quality(engine, agent)
     else:
         tab_health(settings, engine, agent, history, stats, db)
 

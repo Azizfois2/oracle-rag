@@ -102,12 +102,12 @@ can tell where it came from.
 One query, four retrieval paths, one screen.
 - Four columns: keyword (Oracle Text), vector (HNSW), hybrid (weighted fusion),
   and reranked (local cross-encoder over the hybrid candidates).
-- Each hit: rank, source, score bar, snippet, and badges showing which *other*
-  paths found it too.
+- Each hit: rank, source, published date, score bar, snippet, and badges showing
+  which *other* paths found it too.
 - A weight slider that moves fusion from keyword-only to vector-only, live.
-- A source filter that applies to every path, so one document can be inspected
-  on its own. The corpus stores source metadata only; date filters need a schema
-  change.
+- A source filter and a published-date range that apply to every path, so one
+  document or one time window can be inspected on its own. Undated rows are left
+  out when a range is set.
 - Per-path latency in milliseconds.
 - A consensus line: how many documents the four methods agree on.
 
@@ -116,7 +116,7 @@ One query, four retrieval paths, one screen.
 
 ### Corpus - *the control*
 - Document and chunk counts, average chunk size, table size, index status.
-- Every source listed with its chunk count.
+- Every source listed with its chunk count and published date.
 - Ingest: paste text or upload `.txt` / `.md` / `.pdf`, with chunk size control.
 - Delete by source, behind an explicit confirmation.
 - Re-index: rebuild the HNSW or Oracle Text index if either went missing.
@@ -138,7 +138,15 @@ A 40-question labelled set, run against all four paths.
 - Each run rebuilds the Oracle Text index first, so keyword scores do not depend
   on what was ingested or deleted earlier.
 
-*Success:* changing a parameter has a number attached to it.
+The answer gate sits beside the retrieval benchmark. It scores 28 labelled
+answers: 19 single-document, 4 cross-document and 5 unanswerable. A case passes
+only when every expected source is cited, every expected fact appears in the
+text, an unanswerable question is refused, and every citation names a real
+document. The scorer is local and costs no quota; a live run is opt-in and small
+by default. Results go to `data/answers-last.json`.
+
+*Success:* changing a parameter has a number attached to it, and a wrong answer
+has a named reason.
 *Failure:* a question nobody can retrieve - visible, not swept away.
 
 ### Health - *the plumbing*
@@ -190,8 +198,8 @@ beyond a few seconds.
 |---|---|
 | Config | `Settings.from_env()`, `Settings.models()` |
 | Connection | `RagEngine.connect()`, `.ensure()`, `.stats()` |
-| Retrieval | `.keyword_search(q,k,source=)`, `.vector_search(q,k,source=)`, `.hybrid_search(q,k,w,source=)`, `.rerank_hits(q,hits,k)`, `.reranked_search(q,k,w,source=)`, `.search_all(q,k,w,rerank=,source=)` |
-| Corpus | `.sources()`, `.ingest(text, source)`, `.delete_source(s)`, `.reindex()`, `.export_corpus()`, `.import_documents(docs, replace=)` |
+| Retrieval | `.keyword_search(q,k,source=,date_from=,date_to=)`, `.vector_search(...)`, `.hybrid_search(q,k,w,...)`, `.rerank_hits(q,hits,k)`, `.reranked_search(...)`, `.search_all(q,k,w,rerank=,source=,date_from=,date_to=)` |
+| Corpus | `.sources()`, `.published_range()`, `.source_passages(source)`, `.ingest(text, source, metadata=)`, `.delete_source(s)`, `.reindex()`, `.export_corpus()`, `.import_documents(docs, replace=)` |
 | Agent | `Agent.ask(q, on_step=, on_token=, on_reset=, context=)`, `ask_local(q, context=)` |
 | Budget | `Quota.status()`, `.record()`, `.mark_exhausted()` |
 | Cache | `AnswerCache.key()`, `.get()`, `.put()`, `.stats()`, `.clear()` |
@@ -199,9 +207,10 @@ beyond a few seconds.
 | MCP | `mcp_server.py`: `search_corpus`, `list_sources`, `corpus_info` (read-only, stdio) |
 | CLI | `ask.py "question"`, `--local`, `--json`, `--no-cache`, `--chat`, `--no-history` |
 
-Types: `Hit` (key, source, text, score, method, detail) and `Answer`
-(text, model, steps, sources, calls, elapsed, cached). No dicts-of-dicts leaking
-into the UI.
+Types: `Hit` (key, source, text, score, method, detail, published) and `Answer`
+(text, model, steps, sources, calls, elapsed, cached). Each `Answer.sources` item
+can carry `snippet` and `published` so the UI can open the passage behind a
+citation without another query. No dicts-of-dicts leaking into the UI.
 
 ---
 
@@ -294,15 +303,23 @@ keeps follow-up context, and supports `/history`, `/find`, `/open`, `/sources`,
 `/trace`, `/title` and `/delete`. `--no-history` keeps a test session in memory.
 No new dependency: Rich and prompt_toolkit were already installed.
 
+**v2.0**
+Published dates in the corpus metadata, read from each article's dateline. The
+Search lab filters every retrieval path by an inclusive date range, and every hit
+shows its date. Existing corpora gain dates in place with `JSON_MERGEPATCH`, so
+nothing is re-embedded. Answers keep the passage behind each citation, and the
+Ask page turns each source into a clickable expander. A 28-case answer gate
+checks expected sources, expected facts, refusals and invented citations, with
+zero-quota scoring and an opt-in live run.
+
 **Next**
-Date metadata in the corpus (the current schema stores source only), a larger and
-more varied labelled set, multi-collection support.
+A larger and more varied labelled set, multi-collection support, and a live
+answer run that can resume where quota stopped it.
 
 **Later**
-Longer discussions with summarised memory, inline citation links, and a shareable
-static report. A full-screen Textual TUI only if the terminal chat proves it
-needs panes and mouse support; it would add a dependency and a second rendering
-surface.
+Longer discussions with summarised memory and a shareable static report. A
+full-screen Textual TUI only if the terminal chat proves it needs panes and mouse
+support; it would add a dependency and a second rendering surface.
 
 ---
 
@@ -321,6 +338,9 @@ surface.
 - [x] A word from a saved discussion finds that thread from the sidebar.
 - [x] A saved discussion can be renamed and downloaded with its sources.
 - [x] The Search lab can restrict every retrieval path to one source.
+- [x] The Search lab can restrict every path to a published-date range.
+- [x] A citation opens to the passage and date behind it.
+- [x] The answer gate scores sources, facts, refusals and invented citations without quota.
 - [x] `ask.py --chat` restores a saved discussion, streams an answer, and keeps context.
 - [x] An MCP client can list three tools and search the corpus over stdio.
 - [x] `python tests/smoke_test.py` passes without spending API quota.
@@ -354,3 +374,7 @@ surface.
 | **Source filter in the retrieval SQL, not after ranking** | Filtering after `FETCH APPROX` would silently shrink the candidate pool and change what each path can return. The predicate sits inside every query, so keyword, vector, hybrid and rerank all see the same one-document corpus. |
 | **Markdown export from the stored answer, not a second renderer** | The export is built by `ChatHistory` from the same rows the UI restores, so it carries the same text, sources and trace. No separate template can drift from what the screen shows. |
 | **Interactive terminal chat, not a full-screen TUI** | `ask.py --chat` reuses `Agent`, `ChatHistory` and the streaming callbacks, so it adds no SQL, no prompt text and no dependency. A Textual TUI would duplicate chat, history, search and settings in a second rendering surface, and `textual` is not installed. The terminal chat covers streaming, follow-ups, saved history and search; a TUI can wait until panes and mouse support are actually needed. |
+| **Published dates in metadata, not a new column** | The corpus metadata is already JSON, and `published` is optional. A new column would force a schema migration and touch every ingest path. ISO strings compare lexically, so the date range is a plain `JSON_VALUE` predicate inside every retrieval query. Rows without a date are excluded from a range instead of being guessed into it. |
+| **Patch dates in place, not re-embed** | `JSON_MERGEPATCH` changes metadata only. Re-ingesting would recompute every embedding for no retrieval gain and would change row ids, which would invalidate saved answers and evaluation runs. The fingerprint is based on row count and id hash, so it stays stable. |
+| **Citations keep the tool's passage** | The retrieval tool already returns the exact chunk the model saw. Parsing that block into `snippet` and `published` means a click can show the evidence without a second search, and an older saved answer falls back to `source_passages()`. |
+| **Answer quality as a separate scorer** | Retrieval hit@k asks whether the right chunk was found. It cannot tell whether the answer cited it, used the fact, refused an unanswerable question, or invented a source. A separate labelled set and pure scoring function keep those failures named, and fake answers let the scorer run with zero quota. |

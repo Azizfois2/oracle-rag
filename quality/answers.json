@@ -1,0 +1,198 @@
+[
+  {
+    "question": "Which cloud providers did NVIDIA partner with to deploy its H200 GPUs?",
+    "type": "single",
+    "expect_sources": ["01_nvidia_ai_infrastructure.md"],
+    "expect_facts": ["Microsoft", "Google", "Oracle"],
+    "why": "three named partners in one article"
+  },
+  {
+    "question": "How much did NVIDIA and its cloud partners commit to AI infrastructure?",
+    "type": "single",
+    "expect_sources": ["01_nvidia_ai_infrastructure.md"],
+    "expect_facts": ["10 billion"],
+    "why": "a specific dollar commitment"
+  },
+  {
+    "question": "What was Databricks valued at in its 2024 funding round?",
+    "type": "single",
+    "expect_sources": ["02_databricks_lakehouse_ai.md"],
+    "expect_facts": ["62 billion"],
+    "why": "valuation figure, easy to confuse with revenue"
+  },
+  {
+    "question": "What is the new Databricks framework for multi-step AI pipelines called?",
+    "type": "single",
+    "expect_sources": ["02_databricks_lakehouse_ai.md"],
+    "expect_facts": ["Mosaic AI Agent Framework"],
+    "why": "exact product name"
+  },
+  {
+    "question": "What are Snowflake's new agents for enterprise data workflows called?",
+    "type": "single",
+    "expect_sources": ["03_snowflake_cortex_agents.md"],
+    "expect_facts": ["Cortex AI Agents"],
+    "why": "exact product name"
+  },
+  {
+    "question": "Which keyword scoring method does Snowflake Cortex Search combine with vector search?",
+    "type": "single",
+    "expect_sources": ["03_snowflake_cortex_agents.md"],
+    "expect_facts": ["BM25"],
+    "why": "one technical term, no synonym needed"
+  },
+  {
+    "question": "How many foundation models does the Vertex AI Model Garden host?",
+    "type": "single",
+    "expect_sources": ["04_google_vertex_ai_update.md"],
+    "expect_facts": ["200"],
+    "why": "numeric fact"
+  },
+  {
+    "question": "How many concurrent agent sessions can Vertex AI Agent Engine handle per project?",
+    "type": "single",
+    "expect_sources": ["04_google_vertex_ai_update.md"],
+    "expect_facts": ["1,000"],
+    "why": "numeric fact with a comma"
+  },
+  {
+    "question": "How many parameters does Microsoft's Phi-4 model have?",
+    "type": "single",
+    "expect_sources": ["05_microsoft_azure_ai_foundry.md"],
+    "expect_facts": ["14", "billion"],
+    "why": "small model size, easy to swap with another model"
+  },
+  {
+    "question": "Which Anthropic model is the default recommendation for Bedrock Agents?",
+    "type": "single",
+    "expect_sources": ["06_aws_bedrock_agents.md"],
+    "expect_facts": ["Claude 3.7 Sonnet"],
+    "why": "model name with a version number"
+  },
+  {
+    "question": "How many data source connectors do Bedrock knowledge bases support now?",
+    "type": "single",
+    "expect_sources": ["06_aws_bedrock_agents.md"],
+    "expect_facts": ["15"],
+    "why": "numeric fact that changed from an earlier number"
+  },
+  {
+    "question": "Which company raised an 85 million dollar Series B for hybrid search?",
+    "type": "single",
+    "expect_sources": ["07_startup_vector_database.md"],
+    "expect_facts": ["VectorForge", "Andreessen Horowitz"],
+    "why": "company and lead investor"
+  },
+  {
+    "question": "What p99 query latency did VectorForge report at one million vectors?",
+    "type": "single",
+    "expect_sources": ["07_startup_vector_database.md"],
+    "expect_facts": ["12 milliseconds"],
+    "why": "benchmark number with a unit"
+  },
+  {
+    "question": "How many monthly downloads did LangGraph reach?",
+    "type": "single",
+    "expect_sources": ["08_langchain_ecosystem_growth.md"],
+    "expect_facts": ["1 million monthly downloads"],
+    "why": "numeric fact"
+  },
+  {
+    "question": "How many monthly active users does LangSmith have?",
+    "type": "single",
+    "expect_sources": ["08_langchain_ecosystem_growth.md"],
+    "expect_facts": ["80,000"],
+    "why": "numeric fact with a comma"
+  },
+  {
+    "question": "What share of large organizations runs at least one AI application in production?",
+    "type": "single",
+    "expect_sources": ["09_enterprise_ai_adoption.md"],
+    "expect_facts": ["72%"],
+    "why": "percentage from the McKinsey survey"
+  },
+  {
+    "question": "What share of respondents cite RAG as the pattern behind their most-used AI applications?",
+    "type": "single",
+    "expect_sources": ["09_enterprise_ai_adoption.md"],
+    "expect_facts": ["68%"],
+    "why": "second percentage in the same article"
+  },
+  {
+    "question": "Which Llama 4 variant is described as the most practically deployable?",
+    "type": "single",
+    "expect_sources": ["10_open_source_ai_models.md"],
+    "expect_facts": ["Maverick"],
+    "why": "one of three variant names"
+  },
+  {
+    "question": "How many parameters does Mistral Large 2 have?",
+    "type": "single",
+    "expect_sources": ["10_open_source_ai_models.md"],
+    "expect_facts": ["123"],
+    "why": "model size"
+  },
+  {
+    "question": "Which two announcements mention Accenture?",
+    "type": "cross",
+    "expect_sources": ["01_nvidia_ai_infrastructure.md", "03_snowflake_cortex_agents.md"],
+    "expect_facts": ["NVIDIA", "Snowflake"],
+    "why": "same partner named in two different articles"
+  },
+  {
+    "question": "How do Microsoft's Phi-4 and Mistral Large 2 compare in size?",
+    "type": "cross",
+    "expect_sources": ["05_microsoft_azure_ai_foundry.md", "10_open_source_ai_models.md"],
+    "expect_facts": ["14", "123"],
+    "why": "two models, two parameter counts"
+  },
+  {
+    "question": "Which articles describe Oracle offering AI infrastructure or model endpoints?",
+    "type": "cross",
+    "expect_sources": ["01_nvidia_ai_infrastructure.md", "10_open_source_ai_models.md"],
+    "expect_facts": ["DGX SuperPOD", "Generative AI"],
+    "why": "Oracle appears in two different roles"
+  },
+  {
+    "question": "Which companies announced agent platforms, and what are they called?",
+    "type": "cross",
+    "expect_sources": ["03_snowflake_cortex_agents.md", "04_google_vertex_ai_update.md", "06_aws_bedrock_agents.md"],
+    "expect_facts": ["Cortex AI Agents", "Agent Engine", "Bedrock Agents 2.0"],
+    "why": "three agent products across three articles"
+  },
+  {
+    "question": "What was NVIDIA's total revenue in its most recent quarter?",
+    "type": "unanswerable",
+    "expect_sources": [],
+    "expect_facts": [],
+    "why": "the article mentions share price, not revenue"
+  },
+  {
+    "question": "Which company acquired Databricks?",
+    "type": "unanswerable",
+    "expect_sources": [],
+    "expect_facts": [],
+    "why": "no acquisition is described"
+  },
+  {
+    "question": "How many employees does VectorForge have in total?",
+    "type": "unanswerable",
+    "expect_sources": [],
+    "expect_facts": [],
+    "why": "only the engineering team size is given, not total headcount"
+  },
+  {
+    "question": "What did OpenAI announce at its 2026 developer conference?",
+    "type": "unanswerable",
+    "expect_sources": [],
+    "expect_facts": [],
+    "why": "OpenAI is mentioned as a partner, but no conference is covered"
+  },
+  {
+    "question": "What is Snowflake's current stock price?",
+    "type": "unanswerable",
+    "expect_sources": [],
+    "expect_facts": [],
+    "why": "market data is outside this corpus"
+  }
+]

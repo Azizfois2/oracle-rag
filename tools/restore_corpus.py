@@ -57,9 +57,11 @@ def main() -> int:
         if engine.source_exists(source):
             print(f"  skip    {source} (already present)")
             continue
-        result = engine.ingest(document.page_content, source, chunk_size=1_000_000)
+        result = engine.ingest(document.page_content, source, chunk_size=1_000_000,
+                               metadata=dict(document.metadata))
         added += int(result["chunks"])
-        print(f"  ingest  {source} ({result['chunks']} chunk)")
+        published = result.get("published") or "undated"
+        print(f"  ingest  {source} ({result['chunks']} chunk, {published})")
 
     print("indexes:", "; ".join(engine.reindex()))
     stats = engine.stats()

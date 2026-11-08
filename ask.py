@@ -63,15 +63,20 @@ def print_local(answer: rc.Answer, k: int) -> None:
         print()
 
 
+def source_label(item: dict) -> str:
+    source = str(item.get("source", "unknown"))
+    published = str(item.get("published") or "")
+    return f"{source}  {published}" if published else source
+
+
 def print_remote(answer: rc.Answer, show_steps: bool) -> None:
     print(answer.text.strip())
     print()
     if answer.sources:
         print("Sources")
         for item in answer.sources:
-            source = item.get("source", "unknown")
             score = float(item.get("relevance", 0.0) or 0.0)
-            print(f"  {source}  {score:.3f}")
+            print(f"  {source_label(item)}  {score:.3f}")
         print()
     if show_steps:
         for step in answer.steps:
@@ -404,9 +409,8 @@ class ChatSession:
             self.console.print("[dim]This answer listed no sources.[/dim]")
             return
         for item in answer.sources:
-            source = item.get("source", "unknown")
             score = float(item.get("relevance", 0.0) or 0.0)
-            self.console.print(f"  {source}  [dim]{score:.3f}[/dim]")
+            self.console.print(f"  {source_label(item)}  [dim]{score:.3f}[/dim]")
 
     def _show_trace(self) -> None:
         answer = self.last_answer
@@ -584,9 +588,8 @@ class ChatSession:
             self.console.print()
             self.console.print("[bold]Sources[/bold]")
             for item in answer.sources:
-                source = item.get("source", "unknown")
                 score = float(item.get("relevance", 0.0) or 0.0)
-                self.console.print(f"  {source}  [dim]{score:.3f}[/dim]")
+                self.console.print(f"  {source_label(item)}  [dim]{score:.3f}[/dim]")
         if self.show_steps:
             self.console.print()
             self._print_steps(answer)

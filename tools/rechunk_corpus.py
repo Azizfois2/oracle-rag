@@ -41,12 +41,14 @@ def main() -> int:
     payload: list[dict] = []
     for document in documents:
         source = str(document.metadata.get("source") or "unknown")
+        published = rc.published_from_text(document.page_content)
         parts = rc.chunk_text(document.page_content, args.size, args.overlap)
         for index, part in enumerate(parts, start=1):
             payload.append({
                 "source": source,
                 "text": part,
-                "metadata": {"chunk": index, "of": len(parts)},
+                "metadata": {"chunk": index, "of": len(parts),
+                             "published": published},
             })
 
     haystack = "\n".join(
