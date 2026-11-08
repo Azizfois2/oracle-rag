@@ -49,6 +49,10 @@ def main() -> int:
     check("quota block rendered", "quota today" in body)
     check("ask empty state rendered", "indexed in Oracle 26ai" in body or "documents" in body)
     check("no database-down screen", "database is not reachable" not in body)
+    check("sidebar can be reopened after collapsing",
+          "stExpandSidebarButton" in body
+          and '[data-testid="stToolbar"]{ display:none; }' not in body,
+          "the expand button is styled and its toolbar stays visible")
 
     print("\n== search lab ==")
     at.segmented_control[0].set_value("Search lab").run()

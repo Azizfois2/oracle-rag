@@ -75,8 +75,14 @@ html, body, .stApp, [data-testid="stMarkdownContainer"], [data-testid="stWidgetL
 }
 .stApp{ background:var(--paper); color:var(--ink); }
 .block-container{ padding-top:1.9rem; padding-bottom:4rem; max-width:1240px; }
-#MainMenu, footer, [data-testid="stToolbar"], [data-testid="stDecoration"],
+#MainMenu, footer, [data-testid="stDecoration"],
 [data-testid="stStatusWidget"], [data-testid="stAppDeployButton"]{ display:none; }
+/* The header toolbar holds the button that reopens a collapsed sidebar.
+   Keep the toolbar itself visible; hide only the controls above. */
+[data-testid="stToolbar"]{ background:transparent; }
+[data-testid="stExpandSidebarButton"]{ display:inline-flex; }
+[data-testid="stExpandSidebarButton"] button{ color:var(--ink2); }
+[data-testid="stExpandSidebarButton"] button:hover{ color:var(--accent); }
 
 .appbar{ display:flex; align-items:flex-end; justify-content:space-between; gap:1rem;
   border-bottom:1px solid var(--line); padding-bottom:.7rem; }
