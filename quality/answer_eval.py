@@ -215,35 +215,60 @@ def score_case(case: dict[str, Any], answer: Any,
     )
 
 
+def summarize_rows(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Build a summary from stored or freshly scored case dictionaries.
+
+    A resumed run keeps the rows it already scored in `data/answers-last.json`.
+    Rebuilding the summary from those rows means a later day does not need to
+    re-ask a question, and the totals still cover every answered case.
+    """
+    totals: dict[str, dict[str, int]] = {}
+    by_type: dict[str, dict[str, int]] = {}
+    for row in rows:
+        for check in row.get("checks") or []:
+            name = str(check.get("name") or "")
+            if not name:
+                continue
+            bucket = totals.setdefault(name, {"passed": 0, "total": 0})
+            bucket["total"] += 1
+            bucket["passed"] += int(bool(check.get("passed")))
+        kind = str(row.get("type") or "single")
+        bucket = by_type.setdefault(kind, {"passed": 0, "total": 0})
+        bucket["total"] += 1
+        bucket["passed"] += int(bool(row.get("passed")))
+
+    passed = sum(1 for row in rows if row.get("passed"))
+    return {
+        "total": len(rows),
+        "passed": passed,
+        "score": round(passed / len(rows), 3) if rows else 0.0,
+        "checks": totals,
+        "by_type": by_type,
+        "cases": [dict(row) for row in rows],
+    }
+
+
 def score_all(cases: Sequence[dict[str, Any]], answers: Sequence[Any],
               corpus_sources: Iterable[str]) -> dict[str, Any]:
     if len(cases) != len(answers):
         raise ValueError(f"{len(cases)} cases but {len(answers)} answers")
     known = list(corpus_sources)
     results = [score_case(case, answer, known) for case, answer in zip(cases, answers)]
+    return summarize_rows([result.as_dict() for result in results])
 
-    totals: dict[str, dict[str, int]] = {}
-    for result in results:
-        for check in result.checks:
-            bucket = totals.setdefault(check.name, {"passed": 0, "total": 0})
-            bucket["total"] += 1
-            bucket["passed"] += int(check.passed)
 
-    by_type: dict[str, dict[str, int]] = {}
-    for result in results:
-        bucket = by_type.setdefault(result.kind, {"passed": 0, "total": 0})
-        bucket["total"] += 1
-        bucket["passed"] += int(result.passed)
+def answered_questions(rows: Iterable[dict[str, Any]]) -> set[str]:
+    """Questions already scored in a saved run."""
+    return {str(row.get("question") or "") for row in rows
+            if row.get("question")}
 
-    passed = sum(1 for result in results if result.passed)
-    return {
-        "total": len(results),
-        "passed": passed,
-        "score": round(passed / len(results), 3) if results else 0.0,
-        "checks": totals,
-        "by_type": by_type,
-        "cases": [result.as_dict() for result in results],
-    }
+
+def pending_cases(cases: Sequence[dict[str, Any]],
+                  rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Cases that a saved run has not answered yet, in their original order."""
+    done = answered_questions(rows)
+    return [case for case in cases
+            if str(case.get("question") or "") not in done]
 
 
 def load_cases(path: Path | str | None = None) -> list[dict[str, Any]]:

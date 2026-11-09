@@ -378,16 +378,23 @@ def _date_clause(date_from: str | None,
     Published dates are stored as ISO strings, so a lexical comparison is also
     a date comparison. Rows without a date are excluded when a range is asked
     for, which is the honest behaviour: an undated document cannot be shown to
-    fall inside the range.
+    fall inside the range. An inverted range is an error, not an empty result:
+    silently returning nothing would look like a corpus with no matches.
     """
+    start = str(date_from)[:10] if date_from else ""
+    end = str(date_to)[:10] if date_to else ""
+    if start and end and start > end:
+        raise RagError(
+            f"date_from {start} is after date_to {end}; "
+            "give the range in order")
     clauses: list[str] = []
     params: dict[str, Any] = {}
-    if date_from:
+    if start:
         clauses.append("JSON_VALUE(metadata, '$.published') >= :pub_from")
-        params["pub_from"] = str(date_from)[:10]
-    if date_to:
+        params["pub_from"] = start
+    if end:
         clauses.append("JSON_VALUE(metadata, '$.published') <= :pub_to")
-        params["pub_to"] = str(date_to)[:10]
+        params["pub_to"] = end
     return clauses, params
 
 

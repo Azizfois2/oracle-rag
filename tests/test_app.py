@@ -225,6 +225,9 @@ def main() -> int:
     check("answer gate offers a live check", bool(answer_runs))
     if limits and answer_runs:
         limits[0].set_value(1).run()
+        check("answer gate estimates the cost",
+              "about 2 to 4 API calls" in markdown_text(at),
+              "about 2 to 4 API calls")
         original_answer = rc.Agent.ask
 
         def fake_answer(self, question, **kwargs):

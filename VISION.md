@@ -147,7 +147,11 @@ answers: 19 single-document, 4 cross-document and 5 unanswerable. A case passes
 only when every expected source is cited, every expected fact appears in the
 text, an unanswerable question is refused, and every citation names a real
 document and a number the tool returned. The scorer is local and costs no quota;
-a live run is opt-in and small by default. Results go to `data/answers-last.json`.
+a live run is opt-in and small by default. Progress is saved after every answer,
+and `--resume` asks only the questions the saved run has not answered, so the
+full gate can span several quota days without repeating a call. The Quality tab
+shows the estimated call cost before the run. Results go to
+`data/answers-last.json`.
 
 *Success:* changing a parameter has a number attached to it, and a wrong answer
 has a named reason.
@@ -324,11 +328,14 @@ calls, and the answer cites that number inline. Each `[1]` is a self-targeting
 link that opens the exact passage and date without JavaScript; hover and keyboard
 focus work too. A document keeps every number that cited it, plus the passage for
 each number. `tests/run_all.py` runs all seven zero-quota suites and prints one
-summary.
+summary. The answer gate saves progress after every answer and resumes from the
+first unanswered case, so the full 28-case run can span quota days. The Quality
+tab shows the estimated call cost before asking. Date-filter tests now cover an
+undated source, an inverted range, a single-day boundary and source plus date
+plus rerank together.
 
 **Next**
-A larger and more varied labelled set, multi-collection support, and a live
-answer run that can resume where quota stopped it.
+A larger and more varied labelled set and multi-collection support.
 
 **Later**
 Longer discussions with summarised memory and a shareable static report. A
@@ -356,6 +363,9 @@ support; it would add a dependency and a second rendering surface.
 - [x] A citation opens to the passage and date behind it.
 - [x] A numbered citation in the answer opens the exact passage it points at.
 - [x] The answer gate scores sources, facts, refusals and invented citations without quota.
+- [x] A quota-stopped answer run resumes from the first unanswered case.
+- [x] The Quality tab estimates the call cost before the answer run.
+- [x] Date filters reject an inverted range, exclude undated rows, and include both ends of a single day.
 - [x] One command runs every zero-quota suite and prints one summary.
 - [x] `ask.py --chat` restores a saved discussion, streams an answer, and keeps context.
 - [x] An MCP client can list three tools and search the corpus over stdio.
@@ -397,3 +407,5 @@ support; it would add a dependency and a second rendering surface.
 | **Numbered tool results, not source names in the text** | A short marker is easier for the model to repeat exactly than a file name, and it stays stable across several tool calls because one counter runs for the whole question. The tool block carries the number, so the renderer never has to guess which source the model meant. A document seen in several chunks keeps every number and the passage for each. |
 | **Self-targeting citation links, not JavaScript** | `[1]` is an anchor whose `href` points at its own `id`. The `:target` rule opens the passage, and hover or keyboard focus opens it too. This needs no script, no component iframe and no second request, and it still works if a browser blocks focus on a plain span. |
 | **One-command runner captures each suite** | Seven separate commands are easy to forget and easy to run with the wrong interpreter. `tests/run_all.py` uses `sys.executable`, runs only the zero-quota suites, keeps full output in `logs/tests/`, and prints one summary. `--llm` and the live answer check stay manual because they spend quota. |
+| **Resume keyed by question, saved after each answer** | The free tier cannot finish 28 live cases in one day. Writing the file after every answer means a quota stop, Ctrl+C or a crash keeps the completed work. `--resume` skips question text already in the file and refuses a saved run whose corpus fingerprint differs, so two corpora are never mixed. |
+| **Reject an inverted date range** | Returning no rows for `from > to` looks like a corpus with no matches, which is the wrong lesson. Raising a clear `RagError` in `_date_clause` gives every retrieval path the same rule and the same message. |

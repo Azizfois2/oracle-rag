@@ -266,10 +266,30 @@ def main() -> int:
           all(row.get("published") for row in engine.sources()))
     check("source passages are available",
           bool(engine.source_passages(target, limit=2)))
+
+    inverted_rejected = False
+    try:
+        engine.keyword_search("hybrid", k=3, date_from=hi, date_to=lo)
+    except rc.RagError:
+        inverted_rejected = True
+    check("inverted date range is rejected", inverted_rejected,
+          f"{hi} to {lo}")
+
+    for edge, query in ((lo, "vector database"),
+                        (hi, "open source models")):
+        edge_bundle = engine.search_all(query, k=5, date_from=edge,
+                                        date_to=edge)
+        edge_hits = (edge_bundle.keyword + edge_bundle.vector
+                     + edge_bundle.hybrid)
+        check(f"single-day boundary includes {edge}",
+              bool(edge_hits) and all(h.published == edge for h in edge_hits),
+              f"{len(edge_hits)} hits, dates "
+              f"{sorted({h.published for h in edge_hits})}")
+
     both = engine.search_all("hybrid", k=3, source=target,
-                             date_from=day, date_to=day)
-    combined = both.keyword + both.vector + both.hybrid
-    check("source and date filters combine",
+                             date_from=day, date_to=day, rerank=True)
+    combined = both.keyword + both.vector + both.hybrid + both.rerank
+    check("source, date and rerank filters combine",
           bool(combined) and all(h.source == target and h.published == day
                                  for h in combined),
           f"{len(combined)} hits")
@@ -296,6 +316,19 @@ def main() -> int:
     check("row count grew", engine.stats()["rows"] > before)
     hits = engine.vector_search("hybrid retrieval at VectorForge", k=5)
     check("new document is retrievable", any(h.source == SCRATCH for h in hits))
+
+    scratch_row = next((row for row in engine.sources()
+                        if row["source"] == SCRATCH), {})
+    check("scratch source has no published date",
+          not scratch_row.get("published"), str(scratch_row.get("published")))
+    ranged = engine.search_all("hybrid search", k=10,
+                               date_from=lo, date_to=hi)
+    ranged_hits = ranged.keyword + ranged.vector + ranged.hybrid
+    check("undated source is excluded from a date range",
+          bool(ranged_hits) and all(h.source != SCRATCH for h in ranged_hits),
+          f"{len(ranged_hits)} hits, scratch: "
+          f"{sum(1 for h in ranged_hits if h.source == SCRATCH)}")
+
     try:
         engine.ingest(doc, SCRATCH)
         duplicate_blocked = False

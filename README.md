@@ -329,7 +329,8 @@ REM the next one spends 2-6 API calls
 ```
 
 `smoke_test.py` covers: settings discovery, connect, stats, the four retrieval
-paths and the local reranker, score ranges, source and published-date filtering,
+paths and the local reranker, score ranges, source and published-date filtering
+(including undated rows, an inverted range and a single-day boundary),
 ingest, export, import, search and delete round-trips, chunking, quota
 bookkeeping, and the streaming and follow-up contract with a fake graph. It
 writes only to a scratch source name and removes it afterwards. `--llm` adds one
@@ -367,8 +368,11 @@ The source filter adds `JSON_VALUE(metadata, '$.source') = :src` inside every
 query, so all four paths rank the same one-document corpus. The published-date
 filter adds `JSON_VALUE(metadata, '$.published') >= :pub_from` and the matching
 upper bound inside every query too. Rows without a date are left out when a
-range is set, because an undated document cannot be shown to fall inside it.
-Scores are computed in `rag_core.py` exactly as shown - copy the SQL and re-run it.
+range is set, because an undated document cannot be shown to fall inside it. The
+range is inclusive at both ends, so a single-day filter includes that whole day.
+An inverted range is rejected with a clear error instead of returning an empty
+result. Scores are computed in `rag_core.py` exactly as shown - copy the SQL and
+re-run it.
 
 The reranker is `cross-encoder/ms-marco-MiniLM-L-6-v2`, loaded on first use and
 run on the CPU. It costs no API quota. Its displayed score is normalised within
@@ -468,8 +472,21 @@ A live run asks Gemini, so it is opt-in and small by default:
 %USERPROFILE%\rag-venv\Scripts\python.exe quality\check_answers.py --all
 ```
 
-The Quality tab offers the same check with a questions-per-run limit. Each run
-is saved to `data/answers-last.json`, which is gitignored and contains no key.
+Progress is saved to `data/answers-last.json` after every answer, so a quota
+stop keeps what was already scored. `--resume` skips the questions in that file
+and asks only the rest, which lets the full 28-case gate run across several
+quota days:
+
+```bat
+%USERPROFILE%\rag-venv\Scripts\python.exe quality\check_answers.py --resume
+%USERPROFILE%\rag-venv\Scripts\python.exe quality\check_answers.py --all --resume
+```
+
+`--resume` refuses a saved run from a different corpus, so results from two
+corpora are never mixed. The Quality tab offers the same check with a
+questions-per-run limit and shows the estimated call cost above the button
+(about 2 to 4 calls per question). Each run is saved to `data/answers-last.json`,
+which is gitignored and contains no key.
 
 ---
 

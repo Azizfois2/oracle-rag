@@ -1290,7 +1290,15 @@ def tab_quality(engine: rc.RagEngine, agent: rc.Agent) -> None:
         help="The free tier allows about 20 requests per day per model. "
              "Start small.",
     )
-    right.markdown("<div style='height:1.55rem'></div>", unsafe_allow_html=True)
+    asked = int(answer_limit)
+    right.markdown("<div style='height:.55rem'></div>", unsafe_allow_html=True)
+    right.markdown(
+        f'<p class="small">This will ask {asked} '
+        f'{"question" if asked == 1 else "questions"}, about '
+        f'{asked * 2} to {asked * 4} API calls. The free tier is about '
+        "20 requests per day per model.</p>",
+        unsafe_allow_html=True,
+    )
     run_answers = right.button("Check answers", type="primary",
                                key="run_answer_check")
 

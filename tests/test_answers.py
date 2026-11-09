@@ -8,6 +8,7 @@ The live check lives in quality/check_answers.py and is opt-in.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -15,9 +16,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import rag_core as rc  # noqa: E402
-from quality.answer_eval import (answer_sources, invented_numbers,  # noqa: E402
-                                 is_refusal, known_numbers, load_cases,
-                                 norm, score_all, score_case)
+from quality.answer_eval import (answer_sources, answered_questions,  # noqa: E402
+                                 invented_numbers, is_refusal, known_numbers,
+                                 load_cases, norm, pending_cases, score_all,
+                                 score_case, summarize_rows)
+from quality.check_answers import saved_rows  # noqa: E402
 
 failures: list[str] = []
 
@@ -186,6 +189,39 @@ def main() -> int:
     check("one failure lowers the count",
           summary["passed"] == summary["total"] - 1,
           f'{summary["passed"]}/{summary["total"]}')
+
+    print("\n== resume math ==")
+    rows = summary["cases"]
+    check("summary keeps one row per case", len(rows) == len(cases),
+          f"{len(rows)} rows")
+    check("answered questions match the rows",
+          len(answered_questions(rows)) == len(rows),
+          f"{len(answered_questions(rows))} questions")
+    pending = pending_cases(cases, rows[:-1])
+    check("resume asks only the unanswered case",
+          [case["question"] for case in pending] == [rows[-1]["question"]],
+          f"{len(pending)} pending")
+    check("resume skips everything when the run is complete",
+          pending_cases(cases, rows) == [])
+    rebuilt = summarize_rows(rows)
+    check("resume summary matches the fresh summary",
+          rebuilt["passed"] == summary["passed"]
+          and rebuilt["total"] == summary["total"]
+          and rebuilt["checks"] == summary["checks"],
+          f'{rebuilt["passed"]}/{rebuilt["total"]}')
+    stored = json.loads(json.dumps(rows))
+    check("stored rows survive a JSON round-trip",
+          summarize_rows(stored)["total"] == len(rows),
+          str(summarize_rows(stored)["total"]))
+    check("resume reads the saved summary layout",
+          len(saved_rows({"summary": {"cases": rows}})) == len(rows),
+          str(len(saved_rows({"summary": {"cases": rows}}))))
+    check("resume reads a top-level cases list",
+          len(saved_rows({"cases": rows})) == len(rows),
+          str(len(saved_rows({"cases": rows}))))
+    check("resume ignores a malformed saved run",
+          saved_rows({"summary": {"cases": "nope"}}) == []
+          and saved_rows({}) == [])
 
     print("\n" + "-" * 60)
     if failures:
