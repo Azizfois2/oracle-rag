@@ -27,6 +27,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
+from contextvars import ContextVar
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
@@ -59,9 +60,17 @@ DEFAULT_MODELS = [
 PROMPT = (
     "You are a helpful AI research analyst. Use the search_tech_news tool "
     "to find information and answer questions about technology companies, "
-    "AI products, partnerships, and industry trends. Always cite your "
-    "sources. Be concise and factual."
+    "AI products, partnerships, and industry trends. Every search result "
+    "starts with a number in brackets, like [1]. Cite the result you used "
+    "inline with that same number, for example [1] or [2]. Use only numbers "
+    "that the tool returned; never invent a source or a number. Always cite "
+    "your sources. Be concise and factual."
 )
+
+# The search tool numbers its results per question, so [1] means the same
+# document throughout one answer. A ContextVar keeps that counter local to
+# the current run even if two sessions share the cached graph.
+_CITATION_SEQ: ContextVar[int] = ContextVar("citation_seq", default=0)
 
 ENV_CANDIDATES = (
     ROOT / ".env",
@@ -443,20 +452,33 @@ def message_text(message: Any) -> str:
     return "\n".join(p for p in parts if p)
 
 
-_SOURCE_LINE = re.compile(r"\[Source:\s*(?P<src>[^|\]]+?)\s*\|\s*Relevance:\s*(?P<score>[0-9.]+)\s*\]")
+_SOURCE_LINE = re.compile(
+    r"(?:\[(?P<num>\d+)\]\s*)?\[Source:\s*(?P<src>[^|\]]+?)\s*"
+    r"\|\s*Relevance:\s*(?P<score>[0-9.]+)\s*\]"
+)
 _SOURCE_BLOCK = re.compile(
-    r"\[Source:\s*(?P<src>[^|\]]+?)\s*\|\s*Relevance:\s*(?P<score>[0-9.]+)"
+    r"(?:\[(?P<num>\d+)\]\s*)?\[Source:\s*(?P<src>[^|\]]+?)\s*"
+    r"\|\s*Relevance:\s*(?P<score>[0-9.]+)"
     r"(?:\s*\|\s*Published:\s*(?P<pub>[0-9-]+))?\s*\]\n"
     r"(?P<text>.*?)(?=\n\n---\n\n|\Z)",
     re.DOTALL,
 )
 
 
-def sources_from_tool(text: str) -> list[dict[str, Any]]:
-    """Read the tool's source blocks, including the passage and date.
+def _citation_number(match: re.Match[str]) -> int | None:
+    raw = match.groupdict().get("num")
+    try:
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
 
-    The passage is kept so the UI can show the exact chunk behind a citation
-    without another query. Older output without a Published field still parses.
+
+def sources_from_tool(text: str) -> list[dict[str, Any]]:
+    """Read the tool's source blocks, including the number, passage and date.
+
+    The number is the marker the model cites inline. The passage is kept so the
+    UI can show the exact chunk behind a citation without another query. Older
+    output without a number or a Published field still parses.
     """
     out: list[dict[str, Any]] = []
     for match in _SOURCE_BLOCK.finditer(text or ""):
@@ -469,6 +491,9 @@ def sources_from_tool(text: str) -> list[dict[str, Any]]:
             "relevance": score,
             "snippet": " ".join(match.group("text").split())[:400],
         }
+        number = _citation_number(match)
+        if number is not None:
+            item["citation"] = number
         if match.group("pub"):
             item["published"] = match.group("pub").strip()
         out.append(item)
@@ -479,8 +504,42 @@ def sources_from_tool(text: str) -> list[dict[str, Any]]:
             score = float(match.group("score"))
         except ValueError:
             score = 0.0
-        out.append({"source": match.group("src").strip(), "relevance": score})
+        item = {"source": match.group("src").strip(), "relevance": score}
+        number = _citation_number(match)
+        if number is not None:
+            item["citation"] = number
+        out.append(item)
     return out
+
+
+def citation_numbers(items: Iterable[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    """Map each citation marker to the source it points at.
+
+    New answers store the numbers the search tool assigned, including every
+    number that pointed at the same document. Older answers have no numbers, so
+    their position in the source list is used; that matches the old tool order.
+    """
+    mapping: dict[int, dict[str, Any]] = {}
+    for position, raw in enumerate(items, start=1):
+        item = raw if isinstance(raw, dict) else {"source": str(raw)}
+        numbers: list[int] = []
+        stored = item.get("citations")
+        if isinstance(stored, (list, tuple)):
+            for value in stored:
+                try:
+                    numbers.append(int(value))
+                except (TypeError, ValueError):
+                    continue
+        if not numbers and item.get("citation") is not None:
+            try:
+                numbers.append(int(item["citation"]))
+            except (TypeError, ValueError):
+                pass
+        if not numbers:
+            numbers.append(position)
+        for number in numbers:
+            mapping.setdefault(number, item)
+    return mapping
 
 
 def extract_text(filename: str, data: bytes) -> str:
@@ -1994,9 +2053,10 @@ class _CountCalls(BaseCallbackHandler):
         self.quota.record(self.model)
 
 
-def _source_block(hit: Hit) -> str:
-    """One tool result block: header, then the passage the model may cite."""
-    header = f"[Source: {hit.source} | Relevance: {hit.score:.2f}"
+def _source_block(hit: Hit, number: int | None = None) -> str:
+    """One tool result block: marker, header, then the passage to cite."""
+    marker = f"[{number}] " if number is not None else ""
+    header = f"{marker}[Source: {hit.source} | Relevance: {hit.score:.2f}"
     if hit.published:
         header += f" | Published: {hit.published}"
     return f"{header}]\n{hit.text}"
@@ -2013,8 +2073,11 @@ def build_search_tool(engine: RagEngine) -> Any:
         hits = engine.vector_search(query, k=4)
         if not hits:
             return "No relevant documents found."
+        start = _CITATION_SEQ.get()
+        _CITATION_SEQ.set(start + len(hits))
         return "\n\n---\n\n".join(
-            _source_block(h) for h in hits
+            _source_block(hit, start + offset)
+            for offset, hit in enumerate(hits, start=1)
         )
 
     return search_tech_news
@@ -2188,6 +2251,7 @@ class Agent:
         errors: list[str] = []
         for model in usable:
             reset_stream()
+            _CITATION_SEQ.set(0)
             counter = _CountCalls(self.quota, model)
             steps: list[Step] = []
             sources: list[dict[str, Any]] = []
@@ -2306,25 +2370,56 @@ class Agent:
 
 
 def _dedupe_sources(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One entry per document, with every citation number that pointed at it."""
     seen: dict[str, dict[str, Any]] = {}
     for item in items:
         src = str(item.get("source", "unknown"))
         score = float(item.get("relevance", 0.0) or 0.0)
-        candidate = {
-            "source": src,
-            "relevance": round(score, 3),
-        }
-        for key in ("snippet", "published"):
-            if item.get(key):
-                candidate[key] = item[key]
-        previous = seen.get(src)
-        if previous is None or score > float(previous.get("relevance", 0.0) or 0.0):
-            seen[src] = candidate
-        elif previous is not None:
-            # Keep a snippet even when a higher score was recorded without one.
+        numbers: set[int] = set()
+        stored = item.get("citations")
+        if isinstance(stored, (list, tuple)):
+            for value in stored:
+                try:
+                    numbers.add(int(value))
+                except (TypeError, ValueError):
+                    continue
+        if item.get("citation") is not None:
+            try:
+                numbers.add(int(item["citation"]))
+            except (TypeError, ValueError):
+                pass
+
+        previous = seen.setdefault(
+            src, {"source": src, "relevance": round(score, 3)})
+        snippet = str(item.get("snippet") or "").strip()
+        if snippet and numbers:
+            passages = previous.setdefault("passages", {})
+            for number in numbers:
+                passages[str(number)] = snippet
+        if score > float(previous.get("relevance", 0.0) or 0.0):
+            previous["relevance"] = round(score, 3)
             for key in ("snippet", "published"):
-                if candidate.get(key) and not previous.get(key):
-                    previous[key] = candidate[key]
+                if item.get(key):
+                    previous[key] = item[key]
+        else:
+            # Keep a passage even when a higher score was recorded without one.
+            for key in ("snippet", "published"):
+                if item.get(key) and not previous.get(key):
+                    previous[key] = item[key]
+
+        merged = set(previous.get("citations") or [])
+        if previous.get("citation") is not None:
+            try:
+                merged.add(int(previous["citation"]))
+            except (TypeError, ValueError):
+                pass
+        merged.update(numbers)
+        if merged:
+            ordered = sorted(merged)
+            previous["citations"] = ordered
+            previous["citation"] = ordered[0]
+        if not previous.get("passages"):
+            previous.pop("passages", None)
     return sorted(seen.values(), key=lambda s: s["relevance"], reverse=True)
 
 

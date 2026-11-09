@@ -67,6 +67,27 @@ def main() -> int:
           and parsed[0].get("published") == "2026-02-14", str(parsed))
     check("tool sources without a date still parse",
           parsed[1].get("source") == "b.md" and "published" not in parsed[1])
+    numbered = (
+        "[1] [Source: a.md | Relevance: 0.85 | Published: 2026-02-14]\nbody text"
+        "\n\n---\n\n[2] [Source: a.md | Relevance: 0.70 | Published: 2026-02-14]\nmore"
+        "\n\n---\n\n[3] [Source: b.md | Relevance: 0.50]\nother text"
+    )
+    numbered_sources = rc.sources_from_tool(numbered)
+    check("tool sources keep their citation numbers",
+          [item.get("citation") for item in numbered_sources] == [1, 2, 3],
+          str([item.get("citation") for item in numbered_sources]))
+    mapping = rc.citation_numbers(numbered_sources)
+    check("citation numbers map to their sources",
+          sorted(mapping) == [1, 2, 3] and mapping[1]["source"] == "a.md",
+          str(sorted(mapping)))
+    deduped = rc._dedupe_sources(numbered_sources)
+    first = next(item for item in deduped if item["source"] == "a.md")
+    check("one document keeps every number that cited it",
+          first.get("citations") == [1, 2], str(first.get("citations")))
+    check("each citation keeps its own passage",
+          first.get("passages") == {"1": "body text", "2": "more"},
+          str(first.get("passages")))
+    check("prompt asks for numbered citations", "[1]" in rc.PROMPT)
 
     print("\n== quality questions ==")
     questions = load_questions()

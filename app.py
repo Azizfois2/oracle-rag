@@ -163,6 +163,22 @@ section[data-testid="stSidebar"] .block-container{ padding-top:1.5rem; }
 .stButton>button[kind="primary"]:hover{ background:#9C3123; border-color:#9C3123; }
 [data-testid="stExpander"] details{ border:1px solid var(--line); border-radius:3px; background:#FFFDFB; }
 hr{ border-color:var(--line); }
+
+/* Inline citation: [1] opens the passage on hover, focus or click. */
+a.cite{ position:relative; display:inline; color:var(--accent);
+  font-family:"IBM Plex Mono",monospace; font-size:.72rem; font-weight:500;
+  padding:0 .08rem; text-decoration:none; }
+a.cite:hover, a.cite:focus{ text-decoration:underline; outline:none; }
+a.cite .cite-body{ display:none; position:absolute; left:0; top:1.45em;
+  width:min(30rem,78vw); text-align:left; background:#FFFDFB; color:var(--ink);
+  border:1px solid var(--line); border-left:2px solid var(--accent);
+  padding:.5rem .65rem; box-shadow:0 6px 18px rgba(27,24,22,.12); z-index:60; }
+a.cite:hover .cite-body, a.cite:focus .cite-body,
+a.cite:target .cite-body{ display:block; }
+a.cite .cite-meta{ display:block; font-size:.62rem; color:var(--ink3);
+  margin-bottom:.2rem; }
+a.cite .cite-text{ display:block; font-family:Inter,"Segoe UI",system-ui,sans-serif;
+  font-size:.78rem; line-height:1.5; white-space:normal; }
 """
 
 
@@ -547,6 +563,93 @@ SUGGESTIONS = (
 )
 
 
+_CITE_MARK = re.compile(r"\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\]")
+_SOURCE_MARK = re.compile(
+    r"\[Source:\s*(?P<src>[^|\]\n]+?)\s*(?:\|[^\]]*)?\]")
+
+
+def citation_passage(item: dict, engine: rc.RagEngine | None,
+                     number: int | None = None) -> str:
+    """The passage behind one citation, from the tool or from Oracle."""
+    snippet = ""
+    passages = item.get("passages")
+    if isinstance(passages, dict) and number is not None:
+        snippet = str(passages.get(str(number)) or passages.get(number) or "").strip()
+    if not snippet:
+        snippet = str(item.get("snippet") or "").strip()
+    if not snippet and engine is not None:
+        name = str(item.get("source") or "")
+        try:
+            passages = engine.source_passages(name, limit=1)
+        except rc.RagError:
+            passages = []
+        if passages:
+            snippet = passages[0].text
+    return " ".join(snippet.split())[:600]
+
+
+def citation_html(number: int, item: dict, passage: str, anchor: str) -> str:
+    name = str(item.get("source") or "unknown")
+    published = str(item.get("published") or "")
+    meta = f"{name} · {published}" if published else name
+    body = esc(passage) if passage else (
+        "No passage stored for this source. Open the Corpus tab to read it.")
+    return (
+        f'<a class="cite" id="{anchor}" href="#{anchor}" '
+        f'aria-label="Source {number}: {esc(meta)}" title="{esc(meta)}">'
+        f'[{number}]'
+        f'<span class="cite-body"><span class="cite-meta">{esc(meta)}</span>'
+        f'<span class="cite-text">{body}</span></span>'
+        f"</a>"
+    )
+
+
+def render_answer_text(answer: rc.Answer,
+                       engine: rc.RagEngine | None = None) -> None:
+    """Render answer text, turning [1] markers into clickable passages."""
+    text = answer.text or ""
+    if not text.strip():
+        return
+    lookup = rc.citation_numbers(answer.sources or [])
+    if not lookup:
+        st.markdown(text)
+        return
+
+    by_name: dict[str, dict] = {}
+    for item in answer.sources:
+        if isinstance(item, dict):
+            by_name.setdefault(str(item.get("source") or "").strip().lower(), item)
+    by_item: dict[int, int] = {}
+    for number in sorted(lookup):
+        by_item.setdefault(id(lookup[number]), number)
+
+    def from_source(match: re.Match[str]) -> str:
+        item = by_name.get(match.group("src").strip().lower())
+        number = by_item.get(id(item)) if item is not None else None
+        return f"[{number}]" if number is not None else match.group(0)
+
+    text = _SOURCE_MARK.sub(from_source, text)
+    seen = {"count": 0}
+    token = uuid.uuid4().hex[:8]
+
+    def from_number(match: re.Match[str]) -> str:
+        chips: list[str] = []
+        for part in re.split(r"\s*,\s*", match.group(1)):
+            number = int(part)
+            item = lookup.get(number)
+            if item is None:
+                chips.append(f"[{number}]")
+                continue
+            seen["count"] += 1
+            anchor = f"cite-{token}-{number}-{seen['count']}"
+            chips.append(citation_html(
+                number, item, citation_passage(item, engine, number), anchor))
+        return "".join(chips)
+
+    rendered = _CITE_MARK.sub(from_number, text)
+    st.markdown(rendered, unsafe_allow_html=seen["count"] > 0)
+
+
 def render_answer_body(answer: rc.Answer, show_text: bool = True,
                        engine: rc.RagEngine | None = None) -> None:
     if answer.local:
@@ -559,7 +662,7 @@ def render_answer_body(answer: rc.Answer, show_text: bool = True,
             st.markdown(row_html(index, hit, "hybrid"), unsafe_allow_html=True)
     else:
         if show_text:
-            st.markdown(answer.text)
+            render_answer_text(answer, engine=engine)
         if answer.cached:
             st.markdown(
                 '<p class="small">Cached: the same question against the same corpus, '
@@ -585,8 +688,8 @@ def render_answer_body(answer: rc.Answer, show_text: bool = True,
 
     if answer.sources:
         st.markdown(
-            '<p class="small">Sources returned by the retrieval tool. '
-            "Click one to read the passage behind it.</p>",
+            '<p class="small">Click a numbered citation in the answer to read '
+            "the passage, or open a source below.</p>",
             unsafe_allow_html=True,
         )
         for item in answer.sources:
@@ -595,7 +698,11 @@ def render_answer_body(answer: rc.Answer, show_text: bool = True,
             name = str(item.get("source") or "unknown")
             published = str(item.get("published") or "")
             relevance = float(item.get("relevance", 0.0) or 0.0)
-            label = f"{name} · {published}" if published else name
+            numbers = item.get("citations")
+            if not isinstance(numbers, (list, tuple)) or not numbers:
+                numbers = [item["citation"]] if item.get("citation") else []
+            prefix = f"[{', '.join(str(n) for n in numbers)}] " if numbers else ""
+            label = f"{prefix}{name} · {published}" if published else f"{prefix}{name}"
             with st.expander(label):
                 meta = f"Relevance {relevance:.3f}"
                 meta += f" · published {published}" if published else " · undated"
@@ -686,7 +793,8 @@ def answer_flow(question: str, settings: rc.Settings, agent: rc.Agent,
             return
 
         if not local:
-            stream_box.markdown(answer.text)
+            with stream_box:
+                render_answer_text(answer, engine=agent.engine)
         render_answer_body(answer, show_text=local, engine=agent.engine)
     st.session_state.chat.append({"role": "assistant", "answer": answer})
     save_message(history, "assistant", answer.text, answer=answer)

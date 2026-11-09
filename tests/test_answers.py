@@ -15,7 +15,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import rag_core as rc  # noqa: E402
-from quality.answer_eval import (answer_sources, is_refusal, load_cases,  # noqa: E402
+from quality.answer_eval import (answer_sources, invented_numbers,  # noqa: E402
+                                 is_refusal, known_numbers, load_cases,
                                  norm, score_all, score_case)
 
 failures: list[str] = []
@@ -120,6 +121,32 @@ def main() -> int:
     detail = next((check.detail for check in failed.checks
                    if check.name == "citations"), "")
     check("invented citation is named", "invented_article.md" in detail, detail)
+
+    facts = ", ".join(first["expect_facts"])
+    good_number = rc.Answer(
+        text=f"According to the corpus: {facts} [1].",
+        model="fake",
+        sources=[{"source": first["expect_sources"][0], "relevance": 1.0,
+                  "citation": 1}],
+    )
+    check("a real citation number passes",
+          score_case(first, good_number, corpus).passed)
+    check("known numbers come from the sources",
+          known_numbers(good_number) == {1}, str(known_numbers(good_number)))
+
+    bad_number = rc.Answer(
+        text=f"According to the corpus: {facts} [9].",
+        model="fake",
+        sources=[{"source": first["expect_sources"][0], "relevance": 1.0,
+                  "citation": 1}],
+    )
+    check("a number the tool never returned is invented",
+          invented_numbers(bad_number) == [9], str(invented_numbers(bad_number)))
+    failed = score_case(first, bad_number, corpus)
+    check("invented citation number fails", not failed.passed)
+    detail = next((check.detail for check in failed.checks
+                   if check.name == "citations"), "")
+    check("invented number is named", "[9]" in detail, detail)
 
     unanswerable = next(case for case in cases
                         if case.get("type") == "unanswerable")

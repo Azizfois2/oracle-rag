@@ -5,7 +5,7 @@ The gate checks four things:
 - every expected source is cited
 - every expected fact appears in the answer text
 - an unanswerable question is refused
-- every citation names a document that exists in the corpus
+- every citation names a document and a number the tool returned
 
 `quality/check_answers.py` runs this against live answers. `tests/test_answers.py`
 runs it against fake answers, so the scoring itself costs zero quota.
@@ -31,6 +31,7 @@ _REFUSAL = re.compile(
 )
 
 _CITATION = re.compile(r"\[Source:\s*([^|\]\n]+)")
+_NUMBER = re.compile(r"\[(\d{1,2})\]")
 
 
 def norm(text: object) -> str:
@@ -90,6 +91,44 @@ def _invented(answer: Any, corpus_sources: Iterable[str]) -> list[str]:
     known = [str(name) for name in corpus_sources]
     return [name for name in answer_sources(answer)
             if not any(_same_source(name, source) for source in known)]
+
+
+def known_numbers(answer: Any) -> set[int]:
+    """Citation numbers the tool actually returned.
+
+    New answers store them on each source. Older answers have none, so the
+    source list position is used, which matches the old tool order.
+    """
+    known: set[int] = set()
+    for position, item in enumerate(getattr(answer, "sources", None) or [], start=1):
+        if not isinstance(item, dict):
+            known.add(position)
+            continue
+        stored = item.get("citations")
+        found = False
+        if isinstance(stored, (list, tuple)):
+            for value in stored:
+                try:
+                    known.add(int(value))
+                    found = True
+                except (TypeError, ValueError):
+                    continue
+        if item.get("citation") is not None:
+            try:
+                known.add(int(item["citation"]))
+                found = True
+            except (TypeError, ValueError):
+                pass
+        if not found:
+            known.add(position)
+    return known
+
+
+def invented_numbers(answer: Any) -> list[int]:
+    """Numbers cited in the text that the tool never returned."""
+    known = known_numbers(answer)
+    return sorted({int(match.group(1)) for match in _NUMBER.finditer(answer_text(answer))
+                   if int(match.group(1)) not in known})
 
 
 @dataclass
@@ -154,9 +193,16 @@ def score_case(case: dict[str, Any], answer: Any,
         ))
 
     invented = _invented(answer, corpus_sources)
+    bad_numbers = invented_numbers(answer)
+    details: list[str] = []
+    if invented:
+        details.append("invented sources: " + ", ".join(invented))
+    if bad_numbers:
+        details.append("invented numbers: "
+                       + ", ".join(f"[{number}]" for number in bad_numbers))
     checks.append(Check(
-        "citations", not invented,
-        "invented: " + ", ".join(invented) if invented else "every citation is real",
+        "citations", not details,
+        "; ".join(details) if details else "every citation is real",
     ))
 
     return CaseScore(

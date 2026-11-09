@@ -85,6 +85,10 @@ Chat with the ReAct agent over the corpus.
   reading → writing) above it, not a dead spinner.
 - Every answer carries a trace: tool calls, the exact queries sent, sources with
   relevance, model used, API calls spent, wall-clock time.
+- Search results are numbered for the whole question, and the answer cites those
+  numbers inline. Clicking `[1]` opens the exact passage and date beside the
+  sentence; hover and keyboard focus do the same. The source list repeats the
+  numbers.
 - **Local mode** toggle: hybrid retrieval with no LLM at all. Zero quota, still
   useful, and the honest fallback when the free tier is empty.
 - **Follow-up context** toggle: the last few turns travel with the question, so
@@ -142,8 +146,8 @@ The answer gate sits beside the retrieval benchmark. It scores 28 labelled
 answers: 19 single-document, 4 cross-document and 5 unanswerable. A case passes
 only when every expected source is cited, every expected fact appears in the
 text, an unanswerable question is refused, and every citation names a real
-document. The scorer is local and costs no quota; a live run is opt-in and small
-by default. Results go to `data/answers-last.json`.
+document and a number the tool returned. The scorer is local and costs no quota;
+a live run is opt-in and small by default. Results go to `data/answers-last.json`.
 
 *Success:* changing a parameter has a number attached to it, and a wrong answer
 has a named reason.
@@ -200,6 +204,7 @@ beyond a few seconds.
 | Connection | `RagEngine.connect()`, `.ensure()`, `.stats()` |
 | Retrieval | `.keyword_search(q,k,source=,date_from=,date_to=)`, `.vector_search(...)`, `.hybrid_search(q,k,w,...)`, `.rerank_hits(q,hits,k)`, `.reranked_search(...)`, `.search_all(q,k,w,rerank=,source=,date_from=,date_to=)` |
 | Corpus | `.sources()`, `.published_range()`, `.source_passages(source)`, `.ingest(text, source, metadata=)`, `.delete_source(s)`, `.reindex()`, `.export_corpus()`, `.import_documents(docs, replace=)` |
+| Citations | `sources_from_tool(text)`, `citation_numbers(items)` |
 | Agent | `Agent.ask(q, on_step=, on_token=, on_reset=, context=)`, `ask_local(q, context=)` |
 | Budget | `Quota.status()`, `.record()`, `.mark_exhausted()` |
 | Cache | `AnswerCache.key()`, `.get()`, `.put()`, `.stats()`, `.clear()` |
@@ -209,8 +214,9 @@ beyond a few seconds.
 
 Types: `Hit` (key, source, text, score, method, detail, published) and `Answer`
 (text, model, steps, sources, calls, elapsed, cached). Each `Answer.sources` item
-can carry `snippet` and `published` so the UI can open the passage behind a
-citation without another query. No dicts-of-dicts leaking into the UI.
+can carry `snippet`, `published`, `citation`, `citations` and `passages`, so the
+UI can open the exact chunk behind each number without another query. No
+dicts-of-dicts leaking into the UI.
 
 ---
 
@@ -312,6 +318,14 @@ Ask page turns each source into a clickable expander. A 28-case answer gate
 checks expected sources, expected facts, refusals and invented citations, with
 zero-quota scoring and an opt-in live run.
 
+**v2.1**
+Search results carry a number for the whole question, even across several tool
+calls, and the answer cites that number inline. Each `[1]` is a self-targeting
+link that opens the exact passage and date without JavaScript; hover and keyboard
+focus work too. A document keeps every number that cited it, plus the passage for
+each number. `tests/run_all.py` runs all seven zero-quota suites and prints one
+summary.
+
 **Next**
 A larger and more varied labelled set, multi-collection support, and a live
 answer run that can resume where quota stopped it.
@@ -340,7 +354,9 @@ support; it would add a dependency and a second rendering surface.
 - [x] The Search lab can restrict every retrieval path to one source.
 - [x] The Search lab can restrict every path to a published-date range.
 - [x] A citation opens to the passage and date behind it.
+- [x] A numbered citation in the answer opens the exact passage it points at.
 - [x] The answer gate scores sources, facts, refusals and invented citations without quota.
+- [x] One command runs every zero-quota suite and prints one summary.
 - [x] `ask.py --chat` restores a saved discussion, streams an answer, and keeps context.
 - [x] An MCP client can list three tools and search the corpus over stdio.
 - [x] `python tests/smoke_test.py` passes without spending API quota.
@@ -378,3 +394,6 @@ support; it would add a dependency and a second rendering surface.
 | **Patch dates in place, not re-embed** | `JSON_MERGEPATCH` changes metadata only. Re-ingesting would recompute every embedding for no retrieval gain and would change row ids, which would invalidate saved answers and evaluation runs. The fingerprint is based on row count and id hash, so it stays stable. |
 | **Citations keep the tool's passage** | The retrieval tool already returns the exact chunk the model saw. Parsing that block into `snippet` and `published` means a click can show the evidence without a second search, and an older saved answer falls back to `source_passages()`. |
 | **Answer quality as a separate scorer** | Retrieval hit@k asks whether the right chunk was found. It cannot tell whether the answer cited it, used the fact, refused an unanswerable question, or invented a source. A separate labelled set and pure scoring function keep those failures named, and fake answers let the scorer run with zero quota. |
+| **Numbered tool results, not source names in the text** | A short marker is easier for the model to repeat exactly than a file name, and it stays stable across several tool calls because one counter runs for the whole question. The tool block carries the number, so the renderer never has to guess which source the model meant. A document seen in several chunks keeps every number and the passage for each. |
+| **Self-targeting citation links, not JavaScript** | `[1]` is an anchor whose `href` points at its own `id`. The `:target` rule opens the passage, and hover or keyboard focus opens it too. This needs no script, no component iframe and no second request, and it still works if a browser blocks focus on a plain span. |
+| **One-command runner captures each suite** | Seven separate commands are easy to forget and easy to run with the wrong interpreter. `tests/run_all.py` uses `sys.executable`, runs only the zero-quota suites, keeps full output in `logs/tests/`, and prints one summary. `--llm` and the live answer check stay manual because they spend quota. |

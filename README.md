@@ -173,9 +173,9 @@ Remote answers are written into the page token by token, so the text starts to
 appear as the model produces it. The trace keeps filling in above, then collapses
 to the elapsed time when the answer is done. A cursor marks the text while it is
 still arriving, and the final message replaces it with the normal formatted
-answer. Sources, the trace, the answer cache and model fallback behave exactly as
-before. Local mode is unchanged: it shows ranked hits, with no model and no
-quota.
+answer, including its numbered inline citations. Sources, the trace, the answer
+cache and model fallback behave exactly as before. Local mode is unchanged: it
+shows ranked hits, with no model and no quota.
 
 **Follow-up context** is on by default. The last few turns of the open discussion
 travel with the new question, so "who funded them?" still makes sense. The trace
@@ -254,10 +254,10 @@ is no longer comparable: run Quality again.
 
 | Surface | What it is for |
 |---|---|
-| **Ask** | ReAct agent over the corpus, with the answer streaming in and a trace: tool calls, queries, sources, API calls, latency. Follow-up context carries the last few turns. Local mode = no LLM, zero quota. A repeated question is served from cache with no call at all. Discussions are saved in Oracle, restored on open, searchable, renameable and downloadable. |
+| **Ask** | ReAct agent over the corpus, with the answer streaming in and a trace: tool calls, queries, sources, API calls, latency. Every source is a numbered inline citation like [1]; click one to open the exact passage and its date. Follow-up context carries the last few turns. Local mode = no LLM, zero quota. A repeated question is served from cache with no call at all. Discussions are saved in Oracle, restored on open, searchable, renameable and downloadable. |
 | **Search lab** | The same query through keyword, vector, hybrid and the local reranker at once - scores, snippets, overlap. Filter every path to one source or one published-date range. The proof that each step earns its keep. |
 | **Corpus** | Source list with published dates, chunk counts, ingest text/files, delete a source, rebuild indexes. |
-| **Quality** | 40 labelled retrieval questions (single, cross-document, unanswerable) with hit@k and MRR per path, plus 28 labelled answer cases that check expected sources, expected facts, refusals and invented citations. Retrieval runs cost no quota; the live answer check is opt-in. |
+| **Quality** | 40 labelled retrieval questions (single, cross-document, unanswerable) with hit@k and MRR per path, plus 28 labelled answer cases that check expected sources, expected facts, refusals and invented citations or citation numbers. Retrieval runs cost no quota; the live answer check is opt-in. |
 | **Health** | Database version, container state, indexes, embedding model, key presence, per-model quota with reset time, answer cache, discussion history, corpus backup. |
 
 ---
@@ -289,9 +289,10 @@ oracle-rag/
   tests/test_mcp.py       MCP server over real stdio, no quota
   tests/test_history.py   discussions persist and rebuild, scratch table only
   tests/test_db_down.py   the offline screen starts without a traceback
+  tests/run_all.py        run every zero-quota suite, one summary
   data/                   quota.json, model.json, answers.json, eval-last.json,
                           answers-last.json (gitignored)
-  logs/                   launcher logs (gitignored)
+  logs/                   launcher and test logs (gitignored)
 ```
 
 **Rule:** `app.py` never imports `oracledb` and never builds a prompt. If the UI
@@ -300,6 +301,20 @@ needs data, `rag_core.py` grows a function.
 ---
 
 ## Tests
+
+One command runs every zero-quota suite and prints one summary:
+
+```bat
+%USERPROFILE%\rag-venv\Scripts\python.exe tests\run_all.py
+%USERPROFILE%\rag-venv\Scripts\python.exe tests\run_all.py --list
+%USERPROFILE%\rag-venv\Scripts\python.exe tests\run_all.py --only test_answers test_cli
+```
+
+It never runs `smoke_test.py --llm` and never runs the live answer check, so it
+spends no Gemini quota. Full output for each suite is kept in
+`logs/tests/<name>.log`.
+
+The same suites can be run one at a time:
 
 ```bat
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\smoke_test.py
@@ -320,8 +335,8 @@ bookkeeping, and the streaming and follow-up contract with a fake graph. It
 writes only to a scratch source name and removes it afterwards. `--llm` adds one
 real agent question and is the only test that spends quota. `test_answers.py`
 scores fake answers against the 28 labelled cases, including missing facts,
-missing sources, refusals and invented citations, so the gate itself costs
-nothing. `test_cli.py` runs `ask.py` one-shot and
+missing sources, refusals, invented source names and invented citation numbers,
+so the gate itself costs nothing. `test_cli.py` runs `ask.py` one-shot and
 drives the interactive chat with piped input and a fake agent, so it costs
 nothing and leaves no discussion behind. `test_mcp.py` starts the MCP server as
 a child process and calls every tool over stdio, so it also costs nothing.
@@ -329,9 +344,11 @@ a child process and calls every tool over stdio, so it also costs nothing.
 scratch table `RAG_CHAT_LOG_TEST`, checks persistence, search, rename and export,
 and drops it, so your real discussions are never touched. `test_app.py` also
 asks one local question, searches and renames it, checks the download button,
-drives a fake streaming answer with follow-up context and a clickable citation,
-runs the answer gate with a fake model, reopens the app in a second session,
-checks that the discussion came back, and deletes that test thread.
+drives a fake streaming answer with follow-up context and a numbered inline
+citation that opens its own passage, runs the answer gate with a fake model,
+reopens the app in a second session, checks that the discussion came back, and
+deletes that test thread. `run_all.py` runs all seven suites in turn and prints
+one pass or fail summary.
 
 ---
 
@@ -417,9 +434,18 @@ embeddings and the corpus fingerprint stay the same. It is safe to run twice.
 New ingests also read a dateline automatically, and `tools/restore_corpus.py`
 and `tools/rechunk_corpus.py` carry the date forward.
 
-Every answer keeps the retrieval tool's source blocks, including the passage
-that was returned and its published date. In the Ask page each source is a
-clickable expander: open it to read the passage behind the citation. If an older
+Every search result the tool returns is numbered: `[1]`, `[2]`, and so on for
+the whole question, even across several tool calls. The prompt tells the model
+to cite that same number inline, so `[1]` in the answer always points at the
+first returned chunk. `sources_from_tool()` keeps the number, the passage and
+the published date, and `citation_numbers()` maps each number back to its
+document. A document that appears in several chunks keeps one entry with every
+number that cited it and the exact passage for each number.
+
+In the Ask page a marker like `[1]` is a small clickable citation. Click it to
+open the passage and its date right beside the sentence; hover or keyboard focus
+also opens it. The source list below repeats the same numbers, so a reader can
+go from the sentence to the evidence without leaving the answer. If an older
 saved answer has no stored passage, the app reads the first chunks for that
 source from Oracle instead.
 
@@ -427,7 +453,8 @@ The answer gate is separate from the retrieval benchmark. `quality/answers.json`
 holds 28 labelled cases: 19 single-document, 4 cross-document and 5
 unanswerable. A case passes only when every expected source is cited, every
 expected fact appears in the text, unanswerable questions are refused, and every
-citation names a real document. Scoring is local and costs no quota:
+citation names a real document and a number the tool returned. Scoring is local
+and costs no quota:
 
 ```bat
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\test_answers.py

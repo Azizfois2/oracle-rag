@@ -66,7 +66,12 @@ def print_local(answer: rc.Answer, k: int) -> None:
 def source_label(item: dict) -> str:
     source = str(item.get("source", "unknown"))
     published = str(item.get("published") or "")
-    return f"{source}  {published}" if published else source
+    numbers = item.get("citations")
+    if not isinstance(numbers, (list, tuple)) or not numbers:
+        numbers = [item["citation"]] if item.get("citation") else []
+    prefix = f"[{', '.join(str(n) for n in numbers)}] " if numbers else ""
+    label = f"{prefix}{source}"
+    return f"{label}  {published}" if published else label
 
 
 def print_remote(answer: rc.Answer, show_steps: bool) -> None:

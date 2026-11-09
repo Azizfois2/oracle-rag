@@ -356,12 +356,12 @@ def main() -> int:
                     seen["context"] = list(context or [])
                     if on_reset:
                         on_reset()
-                    for piece in ("Streamed ", "answer."):
+                    for piece in ("Streamed ", "answer [1]."):
                         seen["tokens"].append(piece)
                         if on_token:
                             on_token(piece)
                     return rc.Answer(
-                        text="Streamed answer.", model="fake",
+                        text="Streamed answer [1].", model="fake",
                         steps=[rc.Step("answer", "answer ready")],
                         sources=[{
                             "source": "01_nvidia_ai_infrastructure.md",
@@ -369,6 +369,8 @@ def main() -> int:
                             "snippet": "NVIDIA today announced a sweeping set of "
                                        "infrastructure partnerships.",
                             "published": "2026-03-10",
+                            "citation": 1,
+                            "citations": [1],
                         }],
                         calls=0, elapsed=0.1,
                     )
@@ -380,24 +382,30 @@ def main() -> int:
                     at.chat_input[0].set_value("And who funded them?").run()
                     check("streaming UI renders without exception",
                           not at.exception, str(at.exception))
-                    check("streamed answer is shown",
-                          "Streamed answer." in markdown_text(at))
                     body = markdown_text(at)
+                    check("streamed answer is shown", "Streamed answer" in body)
                     check("answer cites a clickable source",
-                          "Click one to read the passage" in body)
+                          "Click a numbered citation" in body)
+                    check("inline citation chip rendered",
+                          'class="cite"' in body and "[1]" in body)
+                    start = body.find('href="#cite-')
+                    end = body.find('"', start + 7) if start >= 0 else -1
+                    anchor = body[start + 7:end] if start >= 0 and end > 0 else ""
+                    check("citation opens its own passage",
+                          bool(anchor) and f'id="{anchor}"' in body, anchor)
                     check("citation shows the passage",
                           "NVIDIA today announced" in body)
                     check("citation shows the published date",
                           "2026-03-10" in body)
                     check("streamed tokens were delivered",
-                          "".join(seen["tokens"]) == "Streamed answer.",
+                          "".join(seen["tokens"]) == "Streamed answer [1].",
                           repr("".join(seen["tokens"])))
                     check("follow-up context reached the agent",
                           len(seen["context"]) >= 2, str(len(seen["context"])))
                     saved = history.messages(chat_id)
                     check("streamed answer is saved in Oracle",
                           any(m["role"] == "assistant"
-                              and getattr(m.get("answer"), "text", "") == "Streamed answer."
+                              and getattr(m.get("answer"), "text", "") == "Streamed answer [1]."
                               for m in saved))
                 finally:
                     rc.Agent.ask = original_ask  # type: ignore[assignment]
