@@ -497,6 +497,7 @@ which is gitignored and contains no key.
 | "Database unreachable" panel | Container stopped | `docker start oracle-26ai-free`, then click **Re-check** |
 | "Table is empty" | Corpus never ingested | Corpus → ingest a file, or run the notebook |
 | Ask says "no model available" | Free-tier quota spent | Wait for midnight Pacific, or use **Local mode** |
+| Ask fails with "timed out" | A Gemini request stalled, or a database read stalled | Try again in a minute; the agent already falls back to the next model. If it repeats, check the container or use **Local mode** |
 | Port 8501 busy | Another Streamlit is running | Close it, or `--server.port 8502` |
 | `torch` import error | Venv damaged | Re-run `START-GUI.bat` (it verifies imports) |
 | First rerank query takes about a minute | The cross-encoder is downloaded once | Wait; later queries take about a second |

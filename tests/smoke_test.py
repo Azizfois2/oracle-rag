@@ -88,6 +88,22 @@ def main() -> int:
           first.get("passages") == {"1": "body text", "2": "more"},
           str(first.get("passages")))
     check("prompt asks for numbered citations", "[1]" in rc.PROMPT)
+    check("a read timeout is transient",
+          rc._is_transient_error(TimeoutError("The read operation timed out")))
+    check("a 503 is transient",
+          rc._is_transient_error(RuntimeError("503 UNAVAILABLE")))
+    check("a plain error is not transient",
+          not rc._is_transient_error(RuntimeError("invalid API key")))
+    check("a timeout is named",
+          rc._is_timeout_error(TimeoutError("The read operation timed out")))
+
+    class ReadTimeout(Exception):
+        pass
+
+    check("a bare ReadTimeout is transient",
+          rc._is_transient_error(ReadTimeout("")))
+    check("a bare ReadTimeout is named",
+          rc._is_timeout_error(ReadTimeout("")))
 
     print("\n== quality questions ==")
     questions = load_questions()
@@ -512,6 +528,39 @@ def main() -> int:
               rc._context_messages([{"role": "error", "content": "quota"},
                                     {"role": "user", "content": "q"}])
               == [("user", "q")])
+
+    print("\n== model fallback ==")
+    class TimeoutGraph:
+        def stream(self, *args: object, **kwargs: object):
+            raise TimeoutError("The read operation timed out")
+            yield  # pragma: no cover
+
+    with tempfile.TemporaryDirectory() as tmp:
+        fallback_agent = rc.Agent(
+            engine,
+            rc.Settings(gemini_key="test-key"),
+            cache=rc.AnswerCache(Path(tmp) / "answers.json"),
+        )
+        fallback_agent.model_order = lambda: ["slow-model", "good-model"]  # type: ignore[assignment]
+        fallback_agent.memory = FakeMemory()  # type: ignore[assignment]
+        good_graph = FakeGraph()
+
+        def graph_for(model: str) -> object:
+            return TimeoutGraph() if model == "slow-model" else good_graph
+
+        fallback_agent._graph = graph_for  # type: ignore[assignment]
+        notes: list[str] = []
+        recovered = fallback_agent.ask(
+            "fallback please", use_cache=False,
+            on_step=lambda kind, text: notes.append(text),
+            on_token=lambda text: None,
+        )
+        check("a timed-out model falls back to the next",
+              recovered.model == "good-model", recovered.model)
+        check("the timeout is noted in the trace",
+              any("timed out" in note for note in notes), str(notes))
+        check("the fallback answer is complete",
+              recovered.text == "Hello world", recovered.text)
 
     if want_llm:
         print("\n== agent (spends quota) ==")

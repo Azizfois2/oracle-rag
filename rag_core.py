@@ -2109,12 +2109,25 @@ _TRANSIENT = re.compile(
     r"^\s*(500|502|503|504)\b|\b(500|502|503|504)\s+(UNAVAILABLE|INTERNAL|BAD_GATEWAY|DEADLINE)",
     re.IGNORECASE,
 )
+_TIMEOUT = re.compile(
+    r"\b(?:read|connect|write|pool)\s+timed?\s*out\b|\btimeout\b|\btimed\s+out\b",
+    re.IGNORECASE,
+)
+
+
+def _is_timeout_error(exc: BaseException) -> bool:
+    """A slow or dropped request, not a bad key and not exhausted quota."""
+    if isinstance(exc, TimeoutError):
+        return True
+    if "timeout" in exc.__class__.__name__.lower():
+        return True
+    return bool(_TIMEOUT.search(str(exc)))
 
 
 def _is_transient_error(exc: BaseException) -> bool:
     """Server-side hiccups that are worth another model, but are not quota."""
-    text = str(exc)
-    if _TRANSIENT.search(text):
+    text = f"{exc.__class__.__name__} {exc}"
+    if _TRANSIENT.search(text) or _is_timeout_error(exc):
         return True
     return "UNAVAILABLE" in text or "currently experiencing high demand" in text.lower()
 
@@ -2329,8 +2342,9 @@ class Agent:
                     emit("note", f"{model} unavailable - trying the next model")
                     continue
                 if _is_transient_error(exc):
-                    errors.append(f"{model}: busy")
-                    emit("note", f"{model} is busy - trying the next model")
+                    reason = "timed out" if _is_timeout_error(exc) else "busy"
+                    errors.append(f"{model}: {reason}")
+                    emit("note", f"{model} {reason} - trying the next model")
                     continue
                 raise AgentError(_first_line(exc)) from exc
 
@@ -2338,6 +2352,11 @@ class Agent:
         if errors and all(error.endswith("out of quota") for error in errors):
             raise QuotaExhausted(
                 f"every Gemini model is out of free-tier quota for today ({detail}) - {pacific_reset_hint()}"
+            )
+        if errors and all(error.endswith("timed out") for error in errors):
+            raise AgentError(
+                f"every Gemini model timed out ({detail}) - try again in a minute, "
+                "or switch on Local mode"
             )
         raise AgentError(
             f"no Gemini model answered the request ({detail}) - Gemini may be busy, "
