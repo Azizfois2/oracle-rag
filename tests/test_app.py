@@ -11,13 +11,19 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import rag_core as rc  # noqa: E402
+from quality.answer_eval import load_cases as load_answer_cases  # noqa: E402
+from quality.answer_store import (append_run, progress_payload,  # noqa: E402
+                                  read_progress, saved_rows)
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
 failures: list[str] = []
@@ -38,6 +44,9 @@ def alert_text(at: AppTest) -> str:
 
 
 def main() -> int:
+    state_dir = Path(tempfile.mkdtemp(prefix="rag-app-answers-"))
+    os.environ["ANSWER_PROGRESS_PATH"] = str(state_dir / "answers-last.json")
+    os.environ["ANSWER_HISTORY_PATH"] = str(state_dir / "answers-history.json")
     at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=240)
     at.run()
 
@@ -229,8 +238,10 @@ def main() -> int:
               "about 2 to 4 API calls" in markdown_text(at),
               "about 2 to 4 API calls")
         original_answer = rc.Agent.ask
+        asked_questions: list[str] = []
 
         def fake_answer(self, question, **kwargs):
+            asked_questions.append(str(question))
             return rc.Answer(
                 text="The corpus does not contain that information.",
                 model="fake", steps=[], sources=[], calls=0, elapsed=0.0,
@@ -256,6 +267,64 @@ def main() -> int:
             frames = [frame.value for frame in at.dataframe]
             check("answer check renders a per-case table",
                   any("failed checks" in frame.columns for frame in frames))
+
+            progress_file = Path(os.environ["ANSWER_PROGRESS_PATH"])
+            saved_run = read_progress(progress_file)
+            check("answer check saves progress after every answer",
+                  len(saved_rows(saved_run)) == 1,
+                  str(len(saved_rows(saved_run))))
+            at.segmented_control[0].set_value("Quality").run()
+            resumed = markdown_text(at)
+            check("resume shows the answered count",
+                  "1 of 28 cases answered" in resumed, resumed[-240:])
+            limits = [n for n in at.number_input if n.key == "answer_limit"]
+            check("resume limits the next batch to the remaining cases",
+                  bool(limits) and int(getattr(limits[0], "max", 0)) == 27,
+                  str(getattr(limits[0], "max", None)) if limits else "none")
+            if limits:
+                limits[0].set_value(1).run()
+            at.button(key="run_answer_check").click().run()
+            check("resume runs without exception", not at.exception,
+                  str(at.exception))
+            check("resume asks a new case, not the first again",
+                  len(asked_questions) >= 2
+                  and asked_questions[0] != asked_questions[1],
+                  str(asked_questions[:3]))
+            saved_run = read_progress(progress_file)
+            check("resume keeps the earlier case",
+                  len(saved_rows(saved_run)) == 2,
+                  str(len(saved_rows(saved_run))))
+
+            history_file = Path(os.environ["ANSWER_HISTORY_PATH"])
+            check("an incomplete run stays out of the trend history",
+                  not history_file.exists())
+
+            cases = load_answer_cases()
+            fingerprint = str(saved_run.get("corpus_fingerprint") or "")
+            fake_rows = [
+                {
+                    "question": case.get("question"),
+                    "type": case.get("type"),
+                    "passed": True,
+                    "checks": [{"name": "citations", "passed": True,
+                                "detail": ""}],
+                    "answer": "",
+                    "sources": [],
+                }
+                for case in cases
+            ]
+            completed = progress_payload(fingerprint, 46, [], "fake", fake_rows)
+            append_run(completed, history_file, expected_total=len(cases))
+            at.segmented_control[0].set_value("Quality").run()
+            trend = markdown_text(at)
+            check("a completed run appears in the trend",
+                  "Pass-rate trend" in trend, trend[-240:])
+            check("the trend separates checks from case types",
+                  "By check" in trend and "By case type" in trend)
+            frames = [frame.value for frame in at.dataframe]
+            check("the trend offers a run history table",
+                  any("run" in frame.columns and "rate" in frame.columns
+                      for frame in frames))
         finally:
             rc.Agent.ask = original_answer  # type: ignore[assignment]
 
@@ -413,6 +482,60 @@ def main() -> int:
                 finally:
                     rc.Agent.ask = original_ask  # type: ignore[assignment]
 
+                retry_original = rc.Agent.ask
+                retry_calls: list[dict] = []
+                fail_once = {"left": 1}
+
+                def flaky_ask(self, question, on_step=None, recursion_limit=25,
+                              use_cache=True, on_token=None, on_reset=None,
+                              context=None):
+                    retry_calls.append({"question": str(question),
+                                        "context": list(context or [])})
+                    if fail_once["left"]:
+                        fail_once["left"] -= 1
+                        raise rc.AgentError("every Gemini model timed out")
+                    return rc.Answer(text="Recovered answer.", model="fake",
+                                     steps=[], sources=[], calls=0, elapsed=0.1)
+
+                rc.Agent.ask = flaky_ask  # type: ignore[assignment]
+                try:
+                    at.session_state["local_mode"] = False
+                    at.chat_input[0].set_value("Will this time out?").run()
+                    check("a failed answer renders without exception",
+                          not at.exception, str(at.exception))
+                    chat = at.session_state.get("chat") or []
+                    check("the failed turn is stored as an error",
+                          bool(chat) and chat[-1]["role"] == "error",
+                          str(chat[-1] if chat else None))
+                    retry_buttons = [b for b in at.button
+                                     if str(b.label) == "Retry"]
+                    check("a retry button appears on the failed answer",
+                          bool(retry_buttons))
+                    if retry_buttons:
+                        retry_buttons[0].click().run()
+                        check("retry runs without exception", not at.exception,
+                              str(at.exception))
+                        check("retry asks the same question again",
+                              len(retry_calls) == 2
+                              and retry_calls[0]["question"]
+                              == retry_calls[1]["question"],
+                              str([item["question"] for item in retry_calls]))
+                        check("retry reuses the same earlier context",
+                              len(retry_calls) == 2
+                              and retry_calls[0]["context"]
+                              == retry_calls[1]["context"],
+                              str([len(item["context"]) for item in retry_calls]))
+                        chat = at.session_state.get("chat") or []
+                        check("retry replaces the error with an answer",
+                              bool(chat) and chat[-1]["role"] == "assistant",
+                              str(chat[-1]["role"] if chat else None))
+                        saved = history.messages(chat_id)
+                        check("retry removes the failed message from Oracle",
+                              all(item["role"] != "error" for item in saved),
+                              str([item["role"] for item in saved]))
+                finally:
+                    rc.Agent.ask = retry_original  # type: ignore[assignment]
+
                 second = AppTest.from_file(str(ROOT / "app.py"), default_timeout=240)
                 second.run()
                 check("reopening restores the latest discussion",
@@ -430,6 +553,8 @@ def main() -> int:
         if chat_id:
             history.delete(chat_id)
         history.e.close()
+
+    shutil.rmtree(state_dir, ignore_errors=True)
 
     print("\n" + "-" * 60)
     if failures:

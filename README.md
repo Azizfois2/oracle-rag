@@ -185,6 +185,11 @@ the retrieval query, which needs no model. The answer cache includes the context
 in its key, so the same words asked in two different discussions cannot share an
 answer by mistake.
 
+If an answer fails, the error stays in the discussion with a **Retry** button
+under it. Retry removes the failed turn from both the page and Oracle, then asks
+the same question again with the same earlier context. You do not retype it, and
+the failed error does not become part of the context.
+
 ---
 
 ## Requirements
@@ -281,6 +286,7 @@ oracle-rag/
   quality/run_eval.py     hit@k / MRR harness (CLI + used by the Quality tab)
   quality/answers.json    28 labelled answer cases: source, facts, refusal
   quality/answer_eval.py  zero-quota scoring for answer quality
+  quality/answer_store.py progress and completed-run history, shared by UI and CLI
   quality/check_answers.py live answer check, saved to data/answers-last.json
   tests/smoke_test.py     engine tests, spend zero API quota
   tests/test_app.py       headless render + live search via streamlit.testing
@@ -291,7 +297,7 @@ oracle-rag/
   tests/test_db_down.py   the offline screen starts without a traceback
   tests/run_all.py        run every zero-quota suite, one summary
   data/                   quota.json, model.json, answers.json, eval-last.json,
-                          answers-last.json (gitignored)
+                          answers-last.json, answers-history.json (gitignored)
   logs/                   launcher and test logs (gitignored)
 ```
 
@@ -483,10 +489,13 @@ quota days:
 ```
 
 `--resume` refuses a saved run from a different corpus, so results from two
-corpora are never mixed. The Quality tab offers the same check with a
-questions-per-run limit and shows the estimated call cost above the button
-(about 2 to 4 calls per question). Each run is saved to `data/answers-last.json`,
-which is gitignored and contains no key.
+corpora are never mixed. The Quality tab reads the same file: it shows
+**"12 of 28 cases answered"**, asks only the remaining cases, and estimates the
+call cost for that remaining count. Progress is written after every answer, so a
+quota stop keeps the completed work. When a run finishes all 28 cases, it is
+added to `data/answers-history.json`, and the Quality tab shows a pass-rate trend
+by check and by case type across completed runs on the current corpus. Both files
+are gitignored and contain no key.
 
 ---
 

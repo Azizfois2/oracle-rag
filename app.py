@@ -24,7 +24,10 @@ import streamlit as st
 
 import rag_core as rc
 from quality.answer_eval import load_cases as load_answer_cases
-from quality.answer_eval import score_all as score_answers
+from quality.answer_eval import pending_cases, score_case
+from quality.answer_store import (append_run, clear_progress, load_runs,
+                                  progress_payload, read_progress,
+                                  save_progress, saved_rows)
 from quality.run_eval import (evaluate, load_last, load_questions, question_type,
                               questions_digest, save_run)
 
@@ -737,7 +740,11 @@ def answer_flow(question: str, settings: rc.Settings, agent: rc.Agent,
     context = follow_context()
     with st.chat_message("user"):
         st.markdown(question)
+    _run_answer(question, settings, agent, history, context)
 
+
+def _run_answer(question: str, settings: rc.Settings, agent: rc.Agent,
+                history: rc.ChatHistory, context: list[dict]) -> None:
     local = st.session_state.local_mode or not settings.has_llm
     with st.chat_message("assistant"):
         status = st.status(
@@ -783,14 +790,14 @@ def answer_flow(question: str, settings: rc.Settings, agent: rc.Agent,
             st.warning(f"{exc}. Switch on Local mode in the sidebar to keep working.")
             st.session_state.chat.append({"role": "error", "content": str(exc)})
             save_message(history, "error", str(exc))
-            return
+            st.rerun()
         except rc.RagError as exc:
             stream_box.empty()
             status.update(label="Failed", state="error", expanded=False)
             st.error(str(exc))
             st.session_state.chat.append({"role": "error", "content": str(exc)})
             save_message(history, "error", str(exc))
-            return
+            st.rerun()
 
         if not local:
             with stream_box:
@@ -798,6 +805,29 @@ def answer_flow(question: str, settings: rc.Settings, agent: rc.Agent,
         render_answer_body(answer, show_text=local, engine=agent.engine)
     st.session_state.chat.append({"role": "assistant", "answer": answer})
     save_message(history, "assistant", answer.text, answer=answer)
+
+
+def retry_last(settings: rc.Settings, agent: rc.Agent,
+               history: rc.ChatHistory) -> None:
+    """Ask the failed question again, with the same earlier context."""
+    chat = st.session_state.get("chat") or []
+    if not chat or chat[-1].get("role") != "error":
+        return
+    question = ""
+    for item in reversed(chat[:-1]):
+        if item.get("role") == "user":
+            question = str(item.get("content") or "")
+            break
+    if not question:
+        return
+    try:
+        history.delete_last_error(st.session_state.get("chat_id"))
+    except rc.RagError as exc:
+        st.session_state.history_flash = (
+            f"The failed message is still in Oracle: {exc}")
+    st.session_state.chat.pop()
+    context = list(st.session_state.chat[:-1])
+    _run_answer(question, settings, agent, history, context)
 
 
 def tab_ask(settings: rc.Settings, agent: rc.Agent, history: rc.ChatHistory,
@@ -825,16 +855,24 @@ def tab_ask(settings: rc.Settings, agent: rc.Agent, history: rc.ChatHistory,
                     'Pick another one in the sidebar, or start a new one.</p>',
                     unsafe_allow_html=True)
 
-    for item in chat:
+    for index, item in enumerate(chat):
         if item["role"] == "user":
             with st.chat_message("user"):
                 st.markdown(item["content"])
         elif item["role"] == "error":
             with st.chat_message("assistant"):
                 st.error(item["content"])
+                if index == len(chat) - 1:
+                    if st.button("Retry", key=f"retry_{index}",
+                                 help="Ask the same question again, with the same context."):
+                        st.session_state.retry_question = True
+                        st.rerun()
         else:
             with st.chat_message("assistant"):
                 render_answer_body(item["answer"], engine=agent.engine)
+
+    if st.session_state.pop("retry_question", False):
+        retry_last(settings, agent, history)
 
     queued = st.session_state.pop("pending", None)
     if queued:
@@ -1283,30 +1321,77 @@ def tab_quality(engine: rc.RagEngine, agent: rc.Agent) -> None:
             hide_index=True,
         )
 
-    left, right = st.columns([1, 2])
-    answer_limit = left.number_input(
-        "Questions per run", 1, len(answer_cases),
-        min(5, len(answer_cases)), key="answer_limit",
-        help="The free tier allows about 20 requests per day per model. "
-             "Start small.",
-    )
-    asked = int(answer_limit)
-    right.markdown("<div style='height:.55rem'></div>", unsafe_allow_html=True)
-    right.markdown(
-        f'<p class="small">This will ask {asked} '
-        f'{"question" if asked == 1 else "questions"}, about '
-        f'{asked * 2} to {asked * 4} API calls. The free tier is about '
-        "20 requests per day per model.</p>",
-        unsafe_allow_html=True,
-    )
-    run_answers = right.button("Check answers", type="primary",
-                               key="run_answer_check")
+    current_fp = engine.corpus_fingerprint()
+    corpus_rows = int(engine.stats().get("rows", 0) or 0)
+    saved = read_progress()
+    saved_fp = str(saved.get("corpus_fingerprint") or "")
+    saved_cases = saved_rows(saved)
+    if saved_cases and saved_fp and saved_fp != current_fp:
+        st.warning(
+            f"The saved answer run used a different corpus (saved {saved_fp}, "
+            f"current {current_fp}). Start a fresh run so the scores are not mixed.")
+        if st.button("Start a fresh answer run", key="clear_answer_progress"):
+            clear_progress()
+            st.session_state.pop("answer_check", None)
+            st.session_state.pop("answer_check_at", None)
+            st.rerun()
+        saved_cases = []
+    known = {str(case.get("question") or "") for case in answer_cases}
+    rows = [row for row in saved_cases
+            if str(row.get("question") or "") in known]
+    remaining = pending_cases(answer_cases, rows)
+    answered = len(rows)
+
+    flash = st.session_state.pop("answer_flash", None)
+    if flash:
+        kind, text = flash
+        if kind == "success":
+            st.success(text)
+        else:
+            st.warning(text)
+
+    if answered:
+        when = str(saved.get("at") or "").replace("T", " ")
+        st.markdown(
+            f'<p class="small"><b>{answered} of {len(answer_cases)} cases '
+            f'answered</b> · saved {esc(when)} · corpus {esc(current_fp)}</p>',
+            unsafe_allow_html=True,
+        )
+
+    if remaining:
+        left, right = st.columns([1, 2])
+        answer_limit = left.number_input(
+            "Questions this run", 1, len(remaining),
+            min(5, len(remaining)), key="answer_limit",
+            help="Only the cases that are still unanswered. The free tier allows "
+                 "about 20 requests per day per model, so start small.",
+        )
+        asked = int(answer_limit)
+        right.markdown("<div style='height:.55rem'></div>", unsafe_allow_html=True)
+        right.markdown(
+            f'<p class="small">This will ask {asked} of the {len(remaining)} '
+            f'{"case" if len(remaining) == 1 else "cases"} still unanswered, about '
+            f'{asked * 2} to {asked * 4} API calls. The free tier is about '
+            "20 requests per day per model.</p>",
+            unsafe_allow_html=True,
+        )
+        run_answers = right.button("Check answers", type="primary",
+                                   key="run_answer_check")
+    else:
+        st.success(f"All {len(answer_cases)} cases are answered on this corpus.")
+        run_answers = False
+        answer_limit = 0
+        if st.button("Start a fresh answer run", key="fresh_answer_run"):
+            clear_progress()
+            st.session_state.pop("answer_check", None)
+            st.session_state.pop("answer_check_at", None)
+            st.rerun()
 
     if run_answers:
-        selected = answer_cases[: int(answer_limit)]
+        selected = remaining[: int(answer_limit)]
         corpus = [row["source"] for row in engine.sources()]
-        answers: list[rc.Answer] = []
-        completed: list[dict] = []
+        run_rows = list(rows)
+        model = str(saved.get("model") or "")
         progress = st.progress(0.0, text="Starting the answer check")
         stopped = ""
         for index, case in enumerate(selected, start=1):
@@ -1315,25 +1400,46 @@ def tab_quality(engine: rc.RagEngine, agent: rc.Agent) -> None:
             try:
                 answer = agent.ask(str(case.get("question") or ""))
             except rc.QuotaExhausted as exc:
-                stopped = f"Quota stopped the run after {len(answers)} answers: {exc}"
+                stopped = (f"Quota stopped the run after {len(run_rows)} of "
+                           f"{len(answer_cases)} cases: {exc}")
                 break
             except rc.RagError as exc:
-                stopped = f"The run stopped after {len(answers)} answers: {exc}"
+                stopped = (f"The run stopped after {len(run_rows)} of "
+                           f"{len(answer_cases)} cases: {exc}")
                 break
-            answers.append(answer)
-            completed.append(case)
+            result = score_case(case, answer, corpus)
+            run_rows.append(result.as_dict())
+            model = answer.model
+            save_progress(progress_payload(
+                current_fp, corpus_rows, corpus, model, run_rows))
         progress.empty()
-        if stopped:
-            st.warning(stopped)
-        if answers:
-            st.session_state.answer_check = score_answers(completed, answers, corpus)
-            st.session_state.answer_check_at = time.strftime("%H:%M:%S")
-        else:
-            st.warning("No answers completed, so there is nothing to score.")
 
-    answer_summary = st.session_state.get("answer_check")
+        if not run_rows:
+            st.warning("No answers completed, so there is nothing to score.")
+        else:
+            payload = progress_payload(
+                current_fp, corpus_rows, corpus, model, run_rows)
+            save_progress(payload)
+            st.session_state.answer_check = payload["summary"]
+            st.session_state.answer_check_at = time.strftime("%H:%M:%S")
+            if stopped:
+                st.session_state.answer_flash = ("warning", stopped)
+            elif len(run_rows) == len(answer_cases):
+                if append_run(payload, expected_total=len(answer_cases)):
+                    st.session_state.answer_flash = (
+                        "success",
+                        f"All {len(answer_cases)} cases answered. "
+                        "This run was added to the trend history.")
+                else:
+                    st.session_state.answer_flash = (
+                        "success", f"All {len(answer_cases)} cases answered.")
+            st.rerun()
+
+    answer_summary = (st.session_state.get("answer_check")
+                      or (saved.get("summary") if rows else None))
     if answer_summary:
-        at = st.session_state.get("answer_check_at", "")
+        at = (st.session_state.get("answer_check_at")
+              or (str(saved.get("at") or "") if rows else ""))
         passed = int(answer_summary.get("passed", 0))
         total = int(answer_summary.get("total", 0))
         rate = float(answer_summary.get("score", 0.0)) * 100
@@ -1374,6 +1480,63 @@ def tab_quality(engine: rc.RagEngine, agent: rc.Agent) -> None:
             })
         with st.expander("Per case", expanded=passed < total):
             st.dataframe(pd.DataFrame(case_rows), hide_index=True)
+
+    runs = [run for run in load_runs()
+            if str(run.get("corpus_fingerprint") or "") == current_fp]
+    if runs:
+        st.markdown('<h3 style="margin-top:1.4rem">Pass-rate trend</h3>',
+                    unsafe_allow_html=True)
+        st.markdown(
+            '<p class="small">One point per completed run on this corpus, oldest '
+            "first. A run joins the history only when every case is answered. "
+            "Hover a point to read its rate.</p>",
+            unsafe_allow_html=True,
+        )
+        labels = [str(run.get("at") or "").replace("T", " ")[:19]
+                  for run in runs]
+
+        def rate_frame(key: str) -> pd.DataFrame:
+            names = sorted({str(name) for run in runs
+                            for name in (run.get(key) or {})})
+            body = []
+            for run in runs:
+                point = {}
+                for name in names:
+                    bucket = (run.get(key) or {}).get(name) or {}
+                    total = int(bucket.get("total") or 0)
+                    point[name] = (int(bucket.get("passed") or 0) / total
+                                   if total else float("nan"))
+                body.append(point)
+            return pd.DataFrame(body, index=labels)
+
+        by_check = rate_frame("checks")
+        by_type = rate_frame("by_type")
+        if len(by_check.columns):
+            st.markdown('<p class="small"><b>By check</b></p>',
+                        unsafe_allow_html=True)
+            st.line_chart(by_check)
+        if len(by_type.columns):
+            st.markdown('<p class="small"><b>By case type</b></p>',
+                        unsafe_allow_html=True)
+            st.line_chart(by_type)
+        history_rows = [
+            {
+                "run": label,
+                "passed": int(run.get("passed") or 0),
+                "total": int(run.get("total") or 0),
+                "rate": float(run.get("score") or 0.0),
+                "model": run.get("model") or "unknown",
+            }
+            for label, run in zip(labels, runs)
+        ]
+        with st.expander("Run history"):
+            st.dataframe(
+                pd.DataFrame(history_rows), hide_index=True,
+                column_config={
+                    "rate": st.column_config.ProgressColumn(
+                        "rate", min_value=0.0, max_value=1.0, format="%.2f"),
+                },
+            )
 
 
 # --------------------------------------------------------------------------- #

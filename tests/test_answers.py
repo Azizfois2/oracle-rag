@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -20,7 +21,9 @@ from quality.answer_eval import (answer_sources, answered_questions,  # noqa: E4
                                  invented_numbers, is_refusal, known_numbers,
                                  load_cases, norm, pending_cases, score_all,
                                  score_case, summarize_rows)
-from quality.check_answers import saved_rows  # noqa: E402
+from quality.answer_store import (append_run, clear_progress, load_runs,
+                                  progress_payload, read_progress,
+                                  save_progress, saved_rows)  # noqa: E402
 
 failures: list[str] = []
 
@@ -222,6 +225,44 @@ def main() -> int:
     check("resume ignores a malformed saved run",
           saved_rows({"summary": {"cases": "nope"}}) == []
           and saved_rows({}) == [])
+
+    print("\n== saved progress and history ==")
+    with tempfile.TemporaryDirectory() as tmp:
+        progress_file = Path(tmp) / "answers-last.json"
+        history_file = Path(tmp) / "answers-history.json"
+        payload = progress_payload("46:test", 46, corpus, "fake-model", rows)
+        check("progress payload summarises the rows",
+              payload["summary"]["total"] == len(rows)
+              and payload["corpus_fingerprint"] == "46:test",
+              str(payload["summary"]["total"]))
+        save_progress(payload, progress_file)
+        loaded = read_progress(progress_file)
+        check("progress survives a write and read",
+              loaded.get("summary", {}).get("total") == len(rows),
+              str(loaded.get("summary", {}).get("total")))
+        check("saved rows are read from the summary",
+              len(saved_rows(loaded)) == len(rows),
+              str(len(saved_rows(loaded))))
+        check("clearing progress removes the file",
+              clear_progress(progress_file) and not progress_file.exists())
+        check("clearing a missing file is harmless",
+              not clear_progress(progress_file))
+
+        check("an incomplete run is not archived",
+              not append_run(payload, history_file,
+                             expected_total=len(cases) + 1))
+        check("a completed run is archived",
+              append_run(payload, history_file, expected_total=len(cases)))
+        check("the same run is not archived twice",
+              not append_run(payload, history_file, expected_total=len(cases)))
+        runs = load_runs(history_file)
+        check("the history keeps one run", len(runs) == 1, str(len(runs)))
+        check("the run keeps its checks and types",
+              bool(runs) and "citations" in runs[0]["checks"]
+              and set(runs[0]["by_type"]) == {"single", "cross", "unanswerable"},
+              str(runs[0].get("checks") if runs else None))
+        check("the history is empty when the file is missing",
+              load_runs(Path(tmp) / "missing.json") == [])
 
     print("\n" + "-" * 60)
     if failures:

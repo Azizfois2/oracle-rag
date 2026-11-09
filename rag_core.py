@@ -996,6 +996,39 @@ class ChatHistory:
         finally:
             cur.close()
 
+    def delete_last_error(self, chat_id: str) -> int:
+        """Remove the newest message when it is an error.
+
+        Retry uses this so the failed turn disappears from both the screen and
+        Oracle before the same question is asked again.
+        """
+        key = str(chat_id or "").strip()
+        if not key:
+            return 0
+        self.ensure()
+        conn = self.e.ensure()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                f"SELECT id, speaker FROM {self.table} WHERE chat_id = :c "
+                "ORDER BY seq DESC, id DESC FETCH FIRST 1 ROWS ONLY",
+                {"c": key},
+            )
+            row = cur.fetchone()
+            if not row or str(row[1]) != "error":
+                return 0
+            cur.execute(f"DELETE FROM {self.table} WHERE id = :i", {"i": row[0]})
+            removed = int(cur.rowcount or 0)
+            conn.commit()
+            return removed
+        except oracledb.Error as exc:
+            conn.rollback()
+            raise RagError(
+                "could not remove the failed message: " + _first_line(exc)
+            ) from exc
+        finally:
+            cur.close()
+
     def delete(self, chat_id: str) -> int:
         self.ensure()
         conn = self.e.ensure()

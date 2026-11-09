@@ -150,8 +150,11 @@ document and a number the tool returned. The scorer is local and costs no quota;
 a live run is opt-in and small by default. Progress is saved after every answer,
 and `--resume` asks only the questions the saved run has not answered, so the
 full gate can span several quota days without repeating a call. The Quality tab
-shows the estimated call cost before the run. Results go to
-`data/answers-last.json`.
+reads the same progress file, shows "N of 28 cases answered", asks only the
+remaining cases, and estimates the call cost for that count. When a run finishes
+all 28 cases it joins a completed-run history, and the tab draws the pass rate by
+check and by case type across runs on the current corpus. Results go to
+`data/answers-last.json` and `data/answers-history.json`.
 
 *Success:* changing a parameter has a number attached to it, and a wrong answer
 has a named reason.
@@ -330,9 +333,11 @@ focus work too. A document keeps every number that cited it, plus the passage fo
 each number. `tests/run_all.py` runs all seven zero-quota suites and prints one
 summary. The answer gate saves progress after every answer and resumes from the
 first unanswered case, so the full 28-case run can span quota days. The Quality
-tab shows the estimated call cost before asking. Date-filter tests now cover an
-undated source, an inverted range, a single-day boundary and source plus date
-plus rerank together.
+tab shows the answered count, asks only the remaining cases, estimates their call
+cost, and draws a pass-rate trend for completed runs. A failed answer carries a
+Retry button that removes the error and asks the same question with the same
+context. Date-filter tests now cover an undated source, an inverted range, a
+single-day boundary and source plus date plus rerank together.
 
 **Next**
 A larger and more varied labelled set and multi-collection support.
@@ -365,6 +370,9 @@ support; it would add a dependency and a second rendering surface.
 - [x] The answer gate scores sources, facts, refusals and invented citations without quota.
 - [x] A quota-stopped answer run resumes from the first unanswered case.
 - [x] The Quality tab estimates the call cost before the answer run.
+- [x] The Quality tab shows the answered count and asks only the remaining cases.
+- [x] A completed answer run joins a pass-rate trend by check and by case type.
+- [x] A failed answer offers Retry, which re-asks the same question with the same context.
 - [x] Date filters reject an inverted range, exclude undated rows, and include both ends of a single day.
 - [x] One command runs every zero-quota suite and prints one summary.
 - [x] `ask.py --chat` restores a saved discussion, streams an answer, and keeps context.
@@ -408,4 +416,7 @@ support; it would add a dependency and a second rendering surface.
 | **Self-targeting citation links, not JavaScript** | `[1]` is an anchor whose `href` points at its own `id`. The `:target` rule opens the passage, and hover or keyboard focus opens it too. This needs no script, no component iframe and no second request, and it still works if a browser blocks focus on a plain span. |
 | **One-command runner captures each suite** | Seven separate commands are easy to forget and easy to run with the wrong interpreter. `tests/run_all.py` uses `sys.executable`, runs only the zero-quota suites, keeps full output in `logs/tests/`, and prints one summary. `--llm` and the live answer check stay manual because they spend quota. |
 | **Resume keyed by question, saved after each answer** | The free tier cannot finish 28 live cases in one day. Writing the file after every answer means a quota stop, Ctrl+C or a crash keeps the completed work. `--resume` skips question text already in the file and refuses a saved run whose corpus fingerprint differs, so two corpora are never mixed. |
+| **One answer store for the UI and the CLI** | Two copies of the progress reader would drift, and the tab would disagree with the command line about what counts as answered. `quality/answer_store.py` owns both files, and `ANSWER_PROGRESS_PATH` / `ANSWER_HISTORY_PATH` let tests use a scratch directory instead of real local state. |
+| **Archive only completed runs, filtered by fingerprint** | A partial run is useful as progress but misleading as a trend point. A run enters `data/answers-history.json` only when every case is answered, is deduped by time, fingerprint and score, and the chart drops runs from another corpus so a restore or re-chunk cannot look like a quality change. |
+| **Retry removes the error, then reuses the question** | Asking again beside the error would leave a failed turn in the context and in Oracle, so the next model call would see an error message it cannot use. `delete_last_error` removes the newest row only when it is an error, then `_run_answer` receives the original question and the same earlier context. |
 | **Reject an inverted date range** | Returning no rows for `from > to` looks like a corpus with no matches, which is the wrong lesson. Raising a clear `RagError` in `_date_clause` gives every retrieval path the same rule and the same message. |

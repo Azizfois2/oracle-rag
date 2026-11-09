@@ -12,15 +12,14 @@ saved to data/answers-last.json after every answer, so a quota stop keeps what
 was already scored. `--resume` reads that file, skips questions it already
 answered, and continues with the rest on the next quota day.
 
-Every run records the corpus fingerprint, so a stale run is easy to spot. No key
-is ever written to that file.
+Every run records the corpus fingerprint, so a stale run is easy to spot. A run
+that answers all cases is also appended to data/answers-history.json, which feeds
+the pass-rate trend in the Quality tab. No key is ever written to either file.
 """
 
 from __future__ import annotations
 
 import argparse
-import datetime as dt
-import json
 import sys
 from pathlib import Path
 
@@ -30,48 +29,21 @@ sys.path.insert(0, str(ROOT))
 import rag_core as rc
 from quality.answer_eval import (load_cases, pending_cases, score_case,
                                  summarize_rows)
+from quality.answer_store import (append_run, progress_path, progress_payload,
+                                  read_progress, save_progress, saved_rows)
 
 OUT = rc.DATA_DIR / "answers-last.json"
 
 
-def read_progress(path: Path) -> dict:
-    """Read a saved run, or an empty dict when there is none."""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def saved_rows(payload: dict) -> list[dict]:
-    """Case scores from a saved run, in the older or newer layout."""
-    rows = payload.get("cases")
-    if not isinstance(rows, list):
-        summary = payload.get("summary")
-        rows = summary.get("cases") if isinstance(summary, dict) else None
-    if not isinstance(rows, list):
-        return []
-    return [row for row in rows if isinstance(row, dict)]
-
-
 def payload_for(engine: rc.RagEngine, corpus: list[str], rows: list[dict],
                 model: str) -> dict:
-    summary = summarize_rows(rows)
-    return {
-        "version": 1,
-        "at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
-        "corpus_fingerprint": engine.corpus_fingerprint(),
-        "corpus_rows": engine.stats().get("rows", 0),
-        "corpus_sources": corpus,
-        "model": model,
-        "summary": summary,
-    }
-
-
-def save_progress(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
-                    encoding="utf-8")
+    return progress_payload(
+        engine.corpus_fingerprint(),
+        engine.stats().get("rows", 0),
+        corpus,
+        model,
+        rows,
+    )
 
 
 def print_summary(summary: dict) -> None:
@@ -96,9 +68,10 @@ def main() -> int:
                         help="list the cases and exit without calling a model")
     parser.add_argument("--no-cache", action="store_true",
                         help="ignore cached answers, so every case calls the model")
-    parser.add_argument("--out", type=Path, default=OUT,
+    parser.add_argument("--out", type=Path, default=None,
                         help=f"where to save the run (default {OUT.name})")
     args = parser.parse_args()
+    out = args.out or progress_path()
 
     cases = load_cases()
     if not cases:
@@ -111,8 +84,8 @@ def main() -> int:
             kind = case.get("type", "single")
             print(f"  {index:2d}. [{kind:12s}] {case.get('question')}")
         if args.resume:
-            rows = saved_rows(read_progress(args.out))
-            print(f"\n  {len(rows)} of {len(cases)} already answered in {args.out.name}")
+            rows = saved_rows(read_progress(out))
+            print(f"\n  {len(rows)} of {len(cases)} already answered in {out.name}")
         return 0
 
     settings = rc.Settings.from_env()
@@ -132,15 +105,15 @@ def main() -> int:
 
         rows: list[dict] = []
         if args.resume:
-            payload = read_progress(args.out)
-            if args.out.exists() and not payload:
-                print(f"could not read {args.out.name}; starting a fresh run")
+            payload = read_progress(out)
+            if out.exists() and not payload:
+                print(f"could not read {out.name}; starting a fresh run")
             saved = saved_rows(payload)
             if saved:
                 saved_fp = str(payload.get("corpus_fingerprint") or "")
                 current_fp = engine.corpus_fingerprint()
                 if saved_fp != current_fp:
-                    print(f"the saved run in {args.out.name} used a different corpus")
+                    print(f"the saved run in {out.name} used a different corpus")
                     print(f"  saved:   {saved_fp or 'unknown'}")
                     print(f"  current: {current_fp}")
                     print("delete that file, or run without --resume, to start fresh")
@@ -152,9 +125,11 @@ def main() -> int:
         remaining = pending_cases(cases, rows)
         if not remaining:
             summary = summarize_rows(rows)
-            print(f"all {len(cases)} cases are already answered in {args.out.name}")
+            print(f"all {len(cases)} cases are already answered in {out.name}")
             print_summary(summary)
-            print(f"  saved to {args.out}")
+            print(f"  saved to {out}")
+            if append_run(read_progress(out), expected_total=len(cases)):
+                print("  added to the run history for the trend view")
             return 0 if summary["passed"] == summary["total"] else 1
 
         selected = remaining if args.all else remaining[: max(1, args.limit)]
@@ -165,6 +140,7 @@ def main() -> int:
         print("free tier is about 20 requests per day per model; stop with Ctrl+C")
 
         stopped = ""
+        model = str(read_progress(out).get("model") or "")
         for index, case in enumerate(selected, start=1):
             question = str(case.get("question") or "")
             print(f"\n[{index}/{len(selected)}] {question}")
@@ -181,8 +157,9 @@ def main() -> int:
 
             result = score_case(case, answer, corpus)
             rows.append(result.as_dict())
-            save_progress(args.out,
-                          payload_for(engine, corpus, rows, answer.model))
+            model = answer.model
+            save_progress(out,
+                          payload_for(engine, corpus, rows, model))
             mark = "PASS" if result.passed else "FAIL"
             print(f"  {mark}  {len(answer.text)} chars, "
                   f"{len(result.sources)} sources, {answer.calls} calls")
@@ -200,9 +177,13 @@ def main() -> int:
         if answered < len(cases):
             print(f"  {answered}/{len(cases)} cases answered; "
                   f"run again with --resume for the remaining {len(cases) - answered}")
-        print(f"  saved to {args.out}")
+        payload = payload_for(engine, corpus, rows, model)
+        save_progress(out, payload)
+        print(f"  saved to {out}")
         if answered < len(cases):
             return 1
+        if append_run(payload, expected_total=len(cases)):
+            print("  added to the run history for the trend view")
         return 0 if summary["passed"] == summary["total"] else 1
     finally:
         engine.close()

@@ -108,6 +108,20 @@ def main() -> int:
               len(messages) == 3 and messages[2]["role"] == "error"
               and "Quota" in messages[2]["content"], str(len(messages)))
 
+        removed_error = history.delete_last_error(chat_id)
+        check("retry removes the failed message", removed_error == 1,
+              str(removed_error))
+        messages = history.messages(chat_id)
+        check("the error is gone after retry",
+              len(messages) == 2
+              and all(item["role"] != "error" for item in messages),
+              str(len(messages)))
+        check("retry does nothing when the last message is not an error",
+              history.delete_last_error(chat_id) == 0)
+        check("retry on an unknown discussion does nothing",
+              history.delete_last_error("missing") == 0)
+        history.append(chat_id, "error", "Quota exhausted")
+
         changed = history.rename(chat_id, "  Price   and funding  ")
         row = next((item for item in history.list(limit=50) if item["id"] == chat_id), None)
         check("rename updates every row", changed == 3, str(changed))
