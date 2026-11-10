@@ -6,6 +6,9 @@
 data/
 logs/
 
+# saved answer artefacts (Markdown, JSON, HTML) — local, disposable
+artifacts/
+
 # python
 __pycache__/
 *.py[cod]

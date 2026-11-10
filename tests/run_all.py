@@ -45,6 +45,10 @@ SUITES = (
           "MCP server over real stdio"),
     Suite("test_db_down", "tests/test_db_down.py",
           "offline screen without a traceback"),
+    Suite("test_artifacts", "tests/test_artifacts.py",
+          "answer artefacts written, read and escaped"),
+    Suite("test_tui", "tests/test_tui.py",
+          "headless Textual panes, theme and artefacts"),
 )
 
 

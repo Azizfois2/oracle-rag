@@ -318,6 +318,14 @@ def main() -> int:
     checks.append(("chat rejects JSON output", proc.returncode == 2,
                    text(proc)[-160:]))
 
+    proc = run("--chat", "--tui", stdin="/quit\n")
+    checks.append(("chat and TUI are mutually exclusive", proc.returncode == 2,
+                   text(proc)[-160:]))
+
+    proc = run("--tui", "--json")
+    checks.append(("TUI rejects one-shot JSON", proc.returncode == 2,
+                   text(proc)[-160:]))
+
     print("\n== ChatSession ==")
     checks.extend(session_checks())
 

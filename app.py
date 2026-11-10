@@ -22,6 +22,7 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 import pandas as pd
 import streamlit as st
 
+import artifacts as arts
 import rag_core as rc
 from quality.answer_eval import load_cases as load_answer_cases
 from quality.answer_eval import pending_cases, score_case
@@ -69,8 +70,11 @@ CSS = """
 
 :root{
   --ink:#1B1816; --ink2:#6B615A; --ink3:#948A82;
-  --line:#E4DBD4; --panel:#F3EDE8; --paper:#FAF7F4;
-  --accent:#B23A2B; --kw:#8A5A0B; --vec:#20609C; --hyb:#1E6E48; --rer:#6B4B8A;
+  --line:#E4DBD4; --line-strong:#C9BDB4; --panel:#F3EDE8; --paper:#FAF7F4;
+  --surface:#FFFDFB; --surface-2:#F7F1EC; --mark:#F6DFC9;
+  --accent:#B23A2B; --accent-hover:#9C3123; --on-accent:#FFF8F6;
+  --kw:#8A5A0B; --vec:#20609C; --hyb:#1E6E48; --rer:#6B4B8A;
+  --warn:#9A6A00; --shadow:rgba(27,24,22,.12);
 }
 
 html, body, .stApp, [data-testid="stMarkdownContainer"], [data-testid="stWidgetLabel"]{
@@ -98,13 +102,13 @@ html, body, .stApp, [data-testid="stMarkdownContainer"], [data-testid="stWidgetL
 .dot{ display:inline-block; width:6px; height:6px; border-radius:50%;
   background:var(--ink3); margin-right:.4rem; vertical-align:1px; }
 .dot.ok{ background:var(--hyb); } .dot.bad{ background:var(--accent); }
-.dot.warn{ background:#9A6A00; }
+.dot.warn{ background:var(--warn); }
 
 h2{ font-size:1.08rem; font-weight:600; letter-spacing:-.01em; margin:.1rem 0 .45rem; }
 h3{ font-size:.88rem; font-weight:600; margin:.2rem 0 .35rem; }
 p, li{ font-size:.89rem; line-height:1.6; }
 .small{ font-size:.77rem; color:var(--ink2); line-height:1.55; }
-mark{ background:#F6DFC9; color:var(--ink); padding:0 .1em; border-radius:2px; }
+mark{ background:var(--mark); color:var(--ink); padding:0 .1em; border-radius:2px; }
 .mono{ font-family:"IBM Plex Mono",ui-monospace,Consolas,monospace; font-variant-numeric:tabular-nums; }
 .kw-t{ color:var(--kw); } .vec-t{ color:var(--vec); } .hyb-t{ color:var(--hyb); }
 .rer-t{ color:var(--rer); }
@@ -140,7 +144,7 @@ div[data-baseweb="tab-border"]{ background:var(--line); }
 i.kw{ background:var(--kw); } i.vec{ background:var(--vec); } i.hyb{ background:var(--hyb); }
 i.rer{ background:var(--rer); }
 
-.panel{ border:1px solid var(--line); background:#FFFDFB; padding:.7rem .85rem; border-radius:3px; }
+.panel{ border:1px solid var(--line); background:var(--surface); padding:.7rem .85rem; border-radius:3px; }
 .panel .k{ font-family:"IBM Plex Mono",monospace; font-size:.62rem; letter-spacing:.11em;
   text-transform:uppercase; color:var(--ink3); }
 .panel .v{ font-size:.85rem; }
@@ -153,18 +157,18 @@ section[data-testid="stSidebar"] .block-container{ padding-top:1.5rem; }
   text-transform:uppercase; color:var(--ink3); margin-top:.15rem; }
 .kv{ display:flex; justify-content:space-between; gap:.6rem; font-size:.73rem; padding:.13rem 0; }
 .kv span{ color:var(--ink3); } .kv b{ font-weight:500; font-family:"IBM Plex Mono",monospace; }
-.bar{ height:3px; background:#E4DBD4; margin:.28rem 0 .1rem; }
+.bar{ height:3px; background:var(--line); margin:.28rem 0 .1rem; }
 .bar>i{ display:block; height:100%; background:var(--accent); }
 
 [data-testid="stChatMessage"]{ background:transparent; padding:.15rem 0; }
 [data-testid="stChatMessageContent"]{ font-size:.89rem; }
 
-.stButton>button{ border-radius:3px; border:1px solid var(--line); background:#FFFDFB;
+.stButton>button{ border-radius:3px; border:1px solid var(--line); background:var(--surface);
   color:var(--ink); font-size:.8rem; font-weight:500; padding:.28rem .7rem; }
-.stButton>button:hover{ border-color:#C9BDB4; background:#F7F1EC; }
-.stButton>button[kind="primary"]{ background:var(--accent); border-color:var(--accent); color:#FFF8F6; }
-.stButton>button[kind="primary"]:hover{ background:#9C3123; border-color:#9C3123; }
-[data-testid="stExpander"] details{ border:1px solid var(--line); border-radius:3px; background:#FFFDFB; }
+.stButton>button:hover{ border-color:var(--line-strong); background:var(--surface-2); }
+.stButton>button[kind="primary"]{ background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+.stButton>button[kind="primary"]:hover{ background:var(--accent-hover); border-color:var(--accent-hover); }
+[data-testid="stExpander"] details{ border:1px solid var(--line); border-radius:3px; background:var(--surface); }
 hr{ border-color:var(--line); }
 
 /* Inline citation: [1] opens the passage on hover, focus or click. */
@@ -173,15 +177,57 @@ a.cite{ position:relative; display:inline; color:var(--accent);
   padding:0 .08rem; text-decoration:none; }
 a.cite:hover, a.cite:focus{ text-decoration:underline; outline:none; }
 a.cite .cite-body{ display:none; position:absolute; left:0; top:1.45em;
-  width:min(30rem,78vw); text-align:left; background:#FFFDFB; color:var(--ink);
+  width:min(30rem,78vw); text-align:left; background:var(--surface); color:var(--ink);
   border:1px solid var(--line); border-left:2px solid var(--accent);
-  padding:.5rem .65rem; box-shadow:0 6px 18px rgba(27,24,22,.12); z-index:60; }
+  padding:.5rem .65rem; box-shadow:0 6px 18px var(--shadow); z-index:60; }
 a.cite:hover .cite-body, a.cite:focus .cite-body,
 a.cite:target .cite-body{ display:block; }
 a.cite .cite-meta{ display:block; font-size:.62rem; color:var(--ink3);
   margin-bottom:.2rem; }
 a.cite .cite-text{ display:block; font-family:Inter,"Segoe UI",system-ui,sans-serif;
   font-size:.78rem; line-height:1.5; white-space:normal; }
+"""
+
+DARK_CSS = """
+:root{
+  color-scheme:dark;
+  --ink:#F2EAE3; --ink2:#B8ACA3; --ink3:#8C8179;
+  --line:#3A322D; --line-strong:#544941; --panel:#211D1A; --paper:#171412;
+  --surface:#1E1A17; --surface-2:#2A2521; --mark:#5A3A22;
+  --accent:#E06A55; --accent-hover:#F07C66; --on-accent:#1B1010;
+  --kw:#E0B05A; --vec:#79B4E8; --hyb:#6FD3A2; --rer:#C3A0E8;
+  --warn:#D9A441; --shadow:rgba(0,0,0,.55);
+}
+/* Streamlit keeps some widgets on its own light palette. These selectors
+   follow the toggle so inputs, chat, tables and popovers stay readable. */
+.stApp [data-baseweb="input"], .stApp [data-baseweb="base-input"],
+.stApp [data-baseweb="textarea"], .stApp [data-baseweb="select"] > div{
+  background:var(--surface)!important; color:var(--ink)!important;
+  border-color:var(--line)!important;
+}
+.stApp [data-baseweb="select"] div, .stApp [data-baseweb="menu"],
+.stApp [data-baseweb="popover"] ul{ background:var(--surface)!important; color:var(--ink)!important; }
+.stApp [data-baseweb="menu"] li:hover, .stApp [data-baseweb="popover"] li:hover{
+  background:var(--surface-2)!important;
+}
+.stApp [data-testid="stChatInput"]{ background:var(--surface)!important;
+  border:1px solid var(--line)!important; border-radius:4px; }
+.stApp [data-testid="stChatInput"] textarea{ color:var(--ink)!important; }
+.stApp [data-testid="stDataFrame"], .stApp [data-testid="stTable"]{
+  background:var(--surface)!important; color:var(--ink)!important;
+}
+.stApp [data-testid="stDataFrame"] [role="columnheader"]{ background:var(--surface-2)!important; }
+.stApp [data-testid="stAlert"]{ background:var(--surface-2)!important; }
+.stApp [data-testid="stCodeBlock"] pre, .stApp [data-testid="stCode"]{
+  background:var(--surface)!important; color:var(--ink)!important;
+}
+.stApp [data-testid="stMetricValue"], .stApp [data-testid="stMetricLabel"]{ color:var(--ink)!important; }
+.stApp [data-testid="stSidebar"] .stButton>button{ background:var(--surface); }
+.stApp [data-testid="stStatusWidget"]{ filter:invert(1); }
+.stApp [data-testid="stSegmentedControl"] button{ color:var(--ink2); }
+.stApp [data-testid="stSegmentedControl"] button[aria-checked="true"]{
+  background:var(--surface); color:var(--ink);
+}
 """
 
 
@@ -340,6 +386,28 @@ def follow_context() -> list[dict]:
     return list(chat[:-1]) if chat else []
 
 
+def question_before(chat: list[dict], index: int) -> str:
+    """The user question that this answer belongs to."""
+    for item in reversed(chat[:index]):
+        if item.get("role") == "user":
+            return str(item.get("content") or "")
+    return ""
+
+
+def save_answer_artefact(chat: list[dict], index: int, answer: rc.Answer) -> None:
+    """Write the answer shown at `index` to the artefacts directory."""
+    question = question_before(chat, index)
+    try:
+        saved = arts.save_answer(
+            question, answer, chat_id=st.session_state.get("chat_id") or "")
+    except (OSError, ValueError) as exc:
+        st.session_state.artifact_flash = f"Could not save this answer: {exc}"
+    else:
+        st.session_state.artifact_flash = (
+            f"Saved {len(saved)} artefacts to {saved[0].path.parent}")
+    st.rerun()
+
+
 # --------------------------------------------------------------------------- #
 # sidebar
 # --------------------------------------------------------------------------- #
@@ -356,6 +424,11 @@ def render_sidebar(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
             '<div class="side-title">Oracle RAG Console</div>'
             '<div class="side-sub">26ai · local</div>',
             unsafe_allow_html=True,
+        )
+        st.toggle(
+            "Dark mode",
+            key="dark_mode",
+            help="Switch the console to the dark palette. The choice lasts for this browser session.",
         )
         flash = st.session_state.pop("history_flash", None)
         if flash:
@@ -485,6 +558,19 @@ def render_sidebar(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
                         key="download_discussion",
                         use_container_width=True,
                     )
+
+                if st.button("Save to artefacts", key="save_discussion_artefact",
+                             use_container_width=True,
+                             help="Write this discussion to artifacts/ as Markdown and JSON."):
+                    try:
+                        saved = arts.save_discussion(history, chat_id)
+                    except (OSError, ValueError, rc.RagError) as exc:
+                        st.session_state.history_flash = f"Could not save the discussion: {exc}"
+                    else:
+                        st.session_state.artifact_flash = (
+                            f"Saved {len(saved)} discussion artefacts to "
+                            f"{saved[0].path.parent}")
+                    st.rerun()
 
                 if st.session_state.get("confirm_delete") == chat_id:
                     st.markdown('<p class="small">Delete this discussion and all of its '
@@ -835,6 +921,9 @@ def tab_ask(settings: rc.Settings, agent: rc.Agent, history: rc.ChatHistory,
     flash = st.session_state.pop("history_flash", None)
     if flash:
         st.warning(flash)
+    saved = st.session_state.pop("artifact_flash", None)
+    if saved:
+        st.success(saved)
 
     chat = st.session_state.chat
     if not chat and not st.session_state.get("pending"):
@@ -869,7 +958,14 @@ def tab_ask(settings: rc.Settings, agent: rc.Agent, history: rc.ChatHistory,
                         st.rerun()
         else:
             with st.chat_message("assistant"):
-                render_answer_body(item["answer"], engine=agent.engine)
+                answer = item["answer"]
+                render_answer_body(answer, engine=agent.engine)
+                if st.button(
+                    "Save artefact",
+                    key=f"save_artefact_{index}",
+                    help="Write this answer to artifacts/ as Markdown, JSON and HTML.",
+                ):
+                    save_answer_artefact(chat, index, answer)
 
     if st.session_state.pop("retry_question", False):
         retry_last(settings, agent, history)
@@ -1540,6 +1636,107 @@ def tab_quality(engine: rc.RagEngine, agent: rc.Agent) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# artefacts
+# --------------------------------------------------------------------------- #
+def tab_artifacts() -> None:
+    flash = st.session_state.pop("artifact_flash", None)
+    if flash:
+        st.success(flash)
+    counts = arts.stats()
+    st.markdown(
+        '<p class="small">Answers and discussions saved as files: Markdown to read, '
+        "JSON to process again, HTML to open in a browser. Use <b>Save artefact</b> "
+        "under any answer, or <b>Save to artefacts</b> in the sidebar. The folder "
+        "is local and no model call is involved.</p>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="panel"><div class="strip">'
+        + panel("files", str(counts["count"]))
+        + panel("size", arts.human_size(int(counts["bytes"])))
+        + panel("latest", when(counts["latest"]) or "none")
+        + panel("folder", Path(str(counts["directory"])).name)
+        + "</div></div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<p class="small mono" style="margin-top:.35rem">{esc(counts["directory"])}</p>',
+        unsafe_allow_html=True,
+    )
+
+    limit = int(st.session_state.get("artifact_limit", 12))
+    items = arts.list_artefacts(limit=limit)
+    if not items:
+        st.markdown(
+            '<p class="small" style="margin-top:1rem">No artefacts yet. Ask a '
+            "question, press <b>Save artefact</b> below the answer, then come back "
+            "here to preview, download or delete the files.</p>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    st.markdown('<h3 style="margin-top:1rem">Saved files</h3>', unsafe_allow_html=True)
+    for item in items:
+        label = (f'{item.title} · {item.kind} · {arts.human_size(item.size)} · '
+                 f'{when(item.created) or "unknown date"}')
+        with st.expander(label):
+            st.markdown(
+                f'<p class="small mono">{esc(item.filename)}</p>',
+                unsafe_allow_html=True,
+            )
+            body = item.preview()
+            if item.kind == "markdown":
+                st.markdown(body)
+            elif item.kind == "json":
+                st.code(body, language="json")
+            elif item.kind == "html":
+                st.code(body, language="html")
+            else:
+                st.code(body)
+            download, remove = st.columns(2)
+            mime = {"markdown": "text/markdown", "json": "application/json",
+                    "html": "text/html", "text": "text/plain"}[item.kind]
+            with download:
+                st.download_button(
+                    "Download",
+                    data=item.path.read_bytes(),
+                    file_name=item.filename,
+                    mime=mime,
+                    key=f"download_artifact_{item.filename}",
+                    use_container_width=True,
+                )
+            with remove:
+                confirm = st.session_state.get("artifact_delete")
+                if confirm == item.filename:
+                    if st.button("Yes, delete", key=f"artifact_delete_yes_{item.filename}",
+                                 type="primary", use_container_width=True):
+                        try:
+                            arts.delete_artefact(item)
+                        except (OSError, ValueError) as exc:
+                            st.session_state.artifact_flash = f"Could not delete: {exc}"
+                        else:
+                            st.session_state.artifact_flash = (
+                                f"Deleted {item.filename}.")
+                        st.session_state.pop("artifact_delete", None)
+                        st.rerun()
+                    if st.button("Cancel", key=f"artifact_delete_no_{item.filename}",
+                                 use_container_width=True):
+                        st.session_state.pop("artifact_delete", None)
+                        st.rerun()
+                elif st.button("Delete", key=f"artifact_delete_{item.filename}",
+                               use_container_width=True):
+                    st.session_state.artifact_delete = item.filename
+                    st.rerun()
+
+    total = int(counts["count"])
+    if total > len(items):
+        if st.button(f"Show more ({total - len(items)} left)", key="more_artifacts",
+                     use_container_width=True):
+            st.session_state.artifact_limit = min(60, limit + 12)
+            st.rerun()
+
+
+# --------------------------------------------------------------------------- #
 # health
 # --------------------------------------------------------------------------- #
 def tab_health(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
@@ -1772,7 +1969,10 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
-    st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
+    st.session_state.setdefault("dark_mode", False)
+    st.session_state.setdefault("artifact_limit", 12)
+    theme = DARK_CSS if st.session_state.get("dark_mode") else ""
+    st.markdown(f"<style>{CSS}{theme}</style>", unsafe_allow_html=True)
 
     settings, engine, agent, history = boot()
     st.session_state.setdefault("local_mode", not settings.has_llm)
@@ -1803,7 +2003,7 @@ def main() -> None:
 
     page = st.segmented_control(
         "Section",
-        ["Ask", "Search lab", "Corpus", "Quality", "Health"],
+        ["Ask", "Search lab", "Corpus", "Quality", "Artefacts", "Health"],
         default="Ask",
         key="page",
         label_visibility="collapsed",
@@ -1818,6 +2018,8 @@ def main() -> None:
         tab_corpus(engine, settings)
     elif page == "Quality":
         tab_quality(engine, agent)
+    elif page == "Artefacts":
+        tab_artifacts()
     else:
         tab_health(settings, engine, agent, history, stats, db)
 

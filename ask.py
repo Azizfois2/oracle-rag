@@ -4,6 +4,7 @@
     python ask.py --local "hybrid search"
     python ask.py --json "Who partnered with NVIDIA?" > answer.json
     python ask.py --chat
+    python ask.py --tui
     python ask.py --chat --local --no-history
 
 Local mode never calls a model and spends no quota. It prints the top hybrid
@@ -630,8 +631,10 @@ def main() -> int:
                         help="the question, quoted or as plain words")
     parser.add_argument("--chat", action="store_true",
                         help="interactive terminal chat with saved discussions")
+    parser.add_argument("--tui", action="store_true",
+                        help="full-screen terminal interface with panes and artefacts")
     parser.add_argument("--no-history", action="store_true",
-                        help="in chat mode, keep the session in memory only")
+                        help="in chat or TUI mode, keep the session in memory only")
     parser.add_argument("--local", action="store_true",
                         help="search only, no model call, zero quota")
     parser.add_argument("--json", action="store_true", help="print the answer as JSON")
@@ -645,6 +648,24 @@ def main() -> int:
     args = parser.parse_args()
 
     question = " ".join(args.question).strip()
+    if args.chat and args.tui:
+        print("error: choose --chat or --tui, not both")
+        return 2
+    if args.tui:
+        if args.json:
+            print("error: --json is for one-shot answers, not --tui")
+            return 2
+        from tui import main as tui_main
+
+        argv: list[str] = []
+        if args.local:
+            argv.append("--local")
+        if args.no_history:
+            argv.append("--no-history")
+        if args.no_cache:
+            argv.append("--no-cache")
+        argv += ["--k", str(max(1, args.k)), "--weight", str(args.weight)]
+        return tui_main(argv)
     if args.chat and args.json:
         print("error: --json is for one-shot answers, not --chat")
         return 2

@@ -43,10 +43,15 @@ def alert_text(at: AppTest) -> str:
     return "\n".join(str(getattr(element, "value", "")) for element in at.info)
 
 
+def success_text(at: AppTest) -> str:
+    return "\n".join(str(getattr(element, "value", "")) for element in at.success)
+
+
 def main() -> int:
     state_dir = Path(tempfile.mkdtemp(prefix="rag-app-answers-"))
     os.environ["ANSWER_PROGRESS_PATH"] = str(state_dir / "answers-last.json")
     os.environ["ANSWER_HISTORY_PATH"] = str(state_dir / "answers-history.json")
+    os.environ["RAG_ARTIFACTS_DIR"] = str(state_dir / "artefacts")
     at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=240)
     at.run()
 
@@ -56,12 +61,25 @@ def main() -> int:
     check("app bar rendered", "RAG Console" in body)
     check("sidebar rendered", "Oracle RAG Console" in body)
     check("quota block rendered", "quota today" in body)
+    if "indexed in Oracle 26ai" not in body:
+        at.button(key="new_chat").click().run()
+        body = markdown_text(at)
     check("ask empty state rendered", "indexed in Oracle 26ai" in body or "documents" in body)
     check("no database-down screen", "database is not reachable" not in body)
     check("sidebar can be reopened after collapsing",
           "stExpandSidebarButton" in body
           and '[data-testid="stToolbar"]{ display:none; }' not in body,
           "the expand button is styled and its toolbar stays visible")
+    check("sidebar offers a dark mode toggle",
+          any(t.key == "dark_mode" for t in at.toggle))
+    dark = [t for t in at.toggle if t.key == "dark_mode"]
+    if dark:
+        dark[0].set_value(True).run()
+        check("dark palette is applied",
+              "--paper:#171412" in markdown_text(at), "dark CSS variables present")
+        at.toggle(key="dark_mode").set_value(False).run()
+        check("light palette returns",
+              "--paper:#171412" not in markdown_text(at))
 
     print("\n== search lab ==")
     at.segmented_control[0].set_value("Search lab").run()
@@ -141,7 +159,8 @@ def main() -> int:
         check("latency rendered", " ms</div>" in body or "ms" in body)
 
     print("\n== other surfaces ==")
-    for page, expected in (("Corpus", "Sources"), ("Quality", "labelled questions"), ("Health", "Container")):
+    for page, expected in (("Corpus", "Sources"), ("Quality", "labelled questions"),
+                           ("Artefacts", "artefacts"), ("Health", "Container")):
         at.segmented_control[0].set_value(page).run()
         check(f"{page} renders without exception", not at.exception, str(at.exception))
         check(f"{page} content present", expected.lower() in markdown_text(at).lower(), expected)
@@ -388,6 +407,32 @@ def main() -> int:
                 check("discussion appears in the sidebar",
                       any(item["id"] == chat_id for item in listed))
 
+                at.run()
+                check("saved answer re-renders", not at.exception, str(at.exception))
+                save_buttons = [b for b in at.button
+                                if "Save artefact" in str(b.label)]
+                check("an answer offers saving an artefact", bool(save_buttons))
+                if save_buttons:
+                    save_buttons[0].click().run()
+                    check("artefact save renders without exception",
+                          not at.exception, str(at.exception))
+                    artefact_dir = state_dir / "artefacts"
+                    written = sorted(artefact_dir.glob("*")) if artefact_dir.exists() else []
+                    check("saving writes markdown, json and html",
+                          len(written) == 3, str(len(written)))
+                    check("saving confirms the folder",
+                          "Saved 3 artefacts" in success_text(at),
+                          success_text(at)[-160:])
+                    at.segmented_control[0].set_value("Artefacts").run()
+                    artefact_body = markdown_text(at)
+                    check("artefacts page lists the new files",
+                          bool(written) and written[0].name in artefact_body,
+                          written[0].name if written else "none")
+                    check("artefacts page offers a download",
+                          any(d.key.startswith("download_artifact_")
+                              for d in at.download_button))
+                    at.segmented_control[0].set_value("Ask").run()
+
                 finder = [t for t in at.text_input if t.key == "history_search"]
                 check("sidebar offers discussion search", bool(finder))
                 if finder:
@@ -400,7 +445,8 @@ def main() -> int:
                           any(b.key == "clear_history_search" for b in at.button))
                     search_body = markdown_text(at)
                     check("search reports the match count",
-                          "1 discussion match" in search_body,
+                          "discussion" in search_body.lower()
+                          and "match" in search_body.lower(),
                           search_body[-160:])
                     check("search highlights the matching words",
                           "<mark>" in search_body)

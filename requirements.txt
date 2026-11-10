@@ -4,3 +4,4 @@
 streamlit==1.66.1
 pypdf==6.21.4
 mcp==2.3.0
+textual==8.2.8

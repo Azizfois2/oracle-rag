@@ -2,8 +2,10 @@
 
 A local web app for the Oracle 26ai hybrid-search corpus: **ask questions, compare
 keyword vs vector vs hybrid vs reranked retrieval, manage the corpus, measure
-quality, check the plumbing, expose the corpus to other agents over MCP, and keep
-your discussions in Oracle** - without touching a notebook cell.
+quality, check the plumbing, expose the corpus to other agents over MCP, save
+answers as artefacts, and keep your discussions in Oracle** - without touching a
+notebook cell. A full-screen terminal UI uses the same engine when you would
+rather stay in the console.
 
 Vision, principles and roadmap: [`VISION.md`](VISION.md).
 
@@ -16,7 +18,14 @@ START-GUI.bat
 ```
 
 That checks the venv, installs the app dependencies if needed, starts Streamlit on
-port 8501 and opens the browser. The Oracle container must be running.
+port 8501 and opens the browser. The Oracle container must be running. Use the
+**Dark mode** toggle in the sidebar to switch palettes without restarting.
+
+For the terminal instead of the browser:
+
+```bat
+START-TUI.bat
+```
 
 The container, the `vector` user and the Python environment are created by the
 companion package [`rag-oneclick`](https://github.com/Azizfois2/rag-oneclick).
@@ -38,6 +47,7 @@ Then open <http://localhost:8501>.
 %USERPROFILE%\rag-venv\Scripts\python.exe ask.py --local "hybrid search"
 %USERPROFILE%\rag-venv\Scripts\python.exe ask.py --json "Who partnered with NVIDIA?" > answer.json
 %USERPROFILE%\rag-venv\Scripts\python.exe ask.py --chat
+%USERPROFILE%\rag-venv\Scripts\python.exe ask.py --tui
 ```
 
 `--local` prints the top hybrid hits and spends no quota. `--no-cache` forces a
@@ -65,6 +75,56 @@ and a discussion is saved after every turn. `/help` lists the commands:
 `--chat --local` runs the session with no model and no quota. `--no-history`
 keeps the session in memory only, so a quick test leaves no rows behind.
 `--steps` prints the trace after each answer. `--json` stays one-shot only.
+
+---
+
+## Terminal UI
+
+`START-TUI.bat`, or `python tui.py`, opens a full-screen terminal interface over
+the same `Agent`, `ChatHistory` and `artifacts` helpers:
+
+```
+┌ Oracle RAG Console ─────────────────────────────────────────────────────────┐
+│ ready                          [ Theme ] [ Save artefact ]                  │
+│                                                                             │
+│ you  Which company raised a Series B?                                       │
+│                                                                             │
+│ The corpus reports ...                                                     │
+│ sources                      │ Sources │ History │ Artefacts │              │
+│ ─────────────────────────────┼─────────────────────────────────             │
+│ Ask the corpus, or /help     │ [1] 07_startup_funding.md  0.94               │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+The left side is the discussion and the prompt. The right side has panes for the
+last answer's sources, saved discussions, and saved artefacts. The theme starts
+dark; `ctrl+t` (or the Theme button) switches to light, `ctrl+s` saves the last
+answer, and `ctrl+l` returns to the prompt. `/help` lists every command,
+including `/local`, `/new`, `/history`, `/find`, `/open`, `/sources`, `/trace`,
+`/save`, `/artefacts`, `/preview` and `/delete`.
+
+The TUI is an optional surface. It installs `textual` from `requirements.txt`
+and never runs a second copy of the retrieval logic. `--local` spends no quota;
+`--no-history` leaves no rows behind; `--theme light` starts in the light
+palette.
+
+---
+
+## Artefacts
+
+An artefact is one answer or one discussion saved under `artifacts/`:
+
+| Format | What it is for |
+|---|---|
+| Markdown (`.md`) | Read the answer, sources and trace as plain text. |
+| JSON (`.json`) | Process the same answer again: model, calls, steps, sources, citations and cache flag. |
+| HTML (`.html`) | Open a standalone page in a browser. It follows the system light/dark preference. |
+
+Save from the **Save artefact** button under any answer, or **Save to artefacts**
+in the sidebar's discussion manager. The **Artefacts** page lists the folder with
+previews, download buttons and delete, and it never calls a model. The path can
+be moved with `RAG_ARTIFACTS_DIR`; generated files are gitignored. Bulk discussion
+export through **Download discussion** is unchanged.
 
 ---
 
@@ -255,7 +315,7 @@ is no longer comparable: run Quality again.
 
 ---
 
-## The five surfaces
+## The six surfaces
 
 | Surface | What it is for |
 |---|---|
@@ -263,6 +323,7 @@ is no longer comparable: run Quality again.
 | **Search lab** | The same query through keyword, vector, hybrid and the local reranker at once - scores, snippets, overlap. Filter every path to one source or one published-date range. The proof that each step earns its keep. |
 | **Corpus** | Source list with published dates, chunk counts, ingest text/files, delete a source, rebuild indexes. |
 | **Quality** | 40 labelled retrieval questions (single, cross-document, unanswerable) with hit@k and MRR per path, plus 28 labelled answer cases that check expected sources, expected facts, refusals and invented citations or citation numbers. Retrieval runs cost no quota; the live answer check is opt-in. |
+| **Artefacts** | Answer and discussion files in `artifacts/`: preview Markdown, JSON and HTML, download or delete them. Saving costs no quota. |
 | **Health** | Database version, container state, indexes, embedding model, key presence, per-model quota with reset time, answer cache, discussion history, corpus backup. |
 
 ---
@@ -272,10 +333,13 @@ is no longer comparable: run Quality again.
 ```
 oracle-rag/
   app.py                  Streamlit UI - no SQL, no prompts
+  tui.py                  full-screen Textual interface over the same contract
+  artifacts.py            Markdown/JSON/HTML writers and readers, no Oracle
   rag_core.py             the only contract: Oracle, retrieval, agent, history
   ask.py                  terminal CLI over the same contract
   mcp_server.py           read-only MCP server for other agents (stdio)
   START-GUI.bat           launcher (checks venv, deps, port)
+  START-TUI.bat           launcher for the terminal interface
   notebook/               the original lab notebook (canonical copy)
   tools/restore_corpus.py re-ingest the ten samples from the notebook
   tools/rechunk_corpus.py split those samples into 46 retrieval chunks
@@ -295,9 +359,12 @@ oracle-rag/
   tests/test_mcp.py       MCP server over real stdio, no quota
   tests/test_history.py   discussions persist and rebuild, scratch table only
   tests/test_db_down.py   the offline screen starts without a traceback
+  tests/test_artifacts.py artefact writing, reading, escaping, no database
+  tests/test_tui.py       headless Textual mount, theme, answer and save
   tests/run_all.py        run every zero-quota suite, one summary
   data/                   quota.json, model.json, answers.json, eval-last.json,
                           answers-last.json, answers-history.json (gitignored)
+  artifacts/              saved Markdown/JSON/HTML answer files (gitignored)
   logs/                   launcher and test logs (gitignored)
 ```
 
@@ -332,6 +399,8 @@ REM the next one spends 2-6 API calls
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\test_mcp.py
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\test_history.py
 %USERPROFILE%\rag-venv\Scripts\python.exe tests\test_db_down.py
+%USERPROFILE%\rag-venv\Scripts\python.exe tests\test_artifacts.py
+%USERPROFILE%\rag-venv\Scripts\python.exe tests\test_tui.py
 ```
 
 `smoke_test.py` covers: settings discovery, connect, stats, the four retrieval
@@ -353,9 +422,13 @@ and drops it, so your real discussions are never touched. `test_app.py` also
 asks one local question, searches and renames it, checks the download button,
 drives a fake streaming answer with follow-up context and a numbered inline
 citation that opens its own passage, runs the answer gate with a fake model,
-reopens the app in a second session, checks that the discussion came back, and
-deletes that test thread. `run_all.py` runs all seven suites in turn and prints
-one pass or fail summary.
+reopens the app in a second session, checks that the discussion came back, saves
+an artefact and lists it on the Artefacts page, then deletes that test thread.
+`test_artifacts.py` writes, reads, clips, deletes and HTML-escapes answer files
+in a temporary folder. `test_tui.py` mounts the Textual app headlessly, toggles
+its theme, asks a fake local question, saves an artefact and runs the pane
+commands. `run_all.py` runs all nine suites in turn and prints one pass or fail
+summary.
 
 ---
 

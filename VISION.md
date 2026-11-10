@@ -77,7 +77,7 @@ This is the product's reason to exist. Everything else is supporting cast.
 
 ---
 
-## 5. The five surfaces
+## 5. The six surfaces
 
 ### Ask - *the product*
 Chat with the ReAct agent over the corpus.
@@ -160,6 +160,18 @@ check and by case type across runs on the current corpus. Results go to
 has a named reason.
 *Failure:* a question nobody can retrieve - visible, not swept away.
 
+### Artefacts - *the durable output*
+Every answer can leave the app as a file: Markdown for reading, JSON for the same
+answer as structured data, and a standalone HTML page that follows the system
+light/dark preference. Saving a discussion writes its Markdown and JSON. The page
+lists the folder with a preview, download and delete; nothing here calls a model
+or touches Oracle. Files land in `artifacts/` (gitignored) and the folder can be
+moved with `RAG_ARTIFACTS_DIR`.
+
+*Success:* an answer can be read, mailed or processed after the browser closes.
+*Failure:* the file drifts from the screen - so both are built from the same
+`Answer` and `ChatHistory` rows.
+
 ### Health - *the plumbing*
 Database version, container state, table/index status, embedding model,
 API key presence (never the value), the per-model quota table with reset time,
@@ -176,6 +188,8 @@ beyond a few seconds.
 **A query console, not a chatbot skin.**
 
 - Graphite ground, one brand accent (Oracle red `#C74634`), everything else quiet.
+  The sidebar's **Dark mode** toggle swaps the same palette to a warm dark ground;
+  the terminal UI starts dark and switches with `ctrl+t`.
 - **Colour carries meaning:** amber = keyword, blue = vector, green = hybrid,
   purple = reranked. The same four colours appear in the lab, the trace and the
   eval table.
@@ -199,8 +213,8 @@ beyond a few seconds.
                 └──────────────────┘
                  connect · search · ingest · agent · quota · history
                   /            |              \
-        app.py (Streamlit)   ask.py      mcp_server.py
-        five UI surfaces     terminal     read-only MCP tools
+        app.py (Streamlit)   ask.py / tui.py   mcp_server.py
+        six UI surfaces      terminal / panes  read-only MCP tools
 ```
 
 `rag_core.py` public surface (stable - the app and tests both use it):
@@ -217,7 +231,7 @@ beyond a few seconds.
 | Cache | `AnswerCache.key()`, `.get()`, `.put()`, `.stats()`, `.clear()` |
 | History | `ChatHistory.list()`, `.search()`, `.messages()`, `.title()`, `.export_markdown()`, `.append()`, `.rename()`, `.delete()`, `.clear()` |
 | MCP | `mcp_server.py`: `search_corpus`, `list_sources`, `corpus_info` (read-only, stdio) |
-| CLI | `ask.py "question"`, `--local`, `--json`, `--no-cache`, `--chat`, `--no-history` |
+| CLI | `ask.py "question"`, `--local`, `--json`, `--no-cache`, `--chat`, `--tui`, `--no-history` |
 
 Types: `Hit` (key, source, text, score, method, detail, published) and `Answer`
 (text, model, steps, sources, calls, elapsed, cached). Each `Answer.sources` item
@@ -330,7 +344,7 @@ Search results carry a number for the whole question, even across several tool
 calls, and the answer cites that number inline. Each `[1]` is a self-targeting
 link that opens the exact passage and date without JavaScript; hover and keyboard
 focus work too. A document keeps every number that cited it, plus the passage for
-each number. `tests/run_all.py` runs all seven zero-quota suites and prints one
+each number. `tests/run_all.py` runs all nine zero-quota suites and prints one
 summary. The answer gate saves progress after every answer and resumes from the
 first unanswered case, so the full 28-case run can span quota days. The Quality
 tab shows the answered count, asks only the remaining cases, estimates their call
@@ -339,20 +353,26 @@ Retry button that removes the error and asks the same question with the same
 context. Date-filter tests now cover an undated source, an inverted range, a
 single-day boundary and source plus date plus rerank together.
 
+**v2.2**
+A dark palette in the Streamlit app, saved per browser session. Answers and
+discussions export as Markdown, JSON and standalone HTML artefacts, listed in an
+**Artefacts** surface with preview, download and delete. A full-screen Textual
+TUI over the same `Agent`, `ChatHistory` and artefact helpers: sources, history
+and artefacts panes, a theme toggle (`ctrl+t`), streaming status and save
+(`ctrl+s`). `ask.py --tui` opens it; `START-TUI.bat` installs and launches it.
+
 **Next**
 A larger and more varied labelled set and multi-collection support.
 
 **Later**
-Longer discussions with summarised memory and a shareable static report. A
-full-screen Textual TUI only if the terminal chat proves it needs panes and mouse
-support; it would add a dependency and a second rendering surface.
+Longer discussions with summarised memory and a shareable static report.
 
 ---
 
 ## 12. Definition of done (v1)
 
 - [x] App starts and renders with the database **down**, explaining what to do.
-- [x] All five surfaces render with a healthy database.
+- [x] All six surfaces render with a healthy database.
 - [x] Keyword, vector and hybrid each return scored hits for the same query.
 - [x] Every displayed score is reproducible with the SQL shown in `rag_core.py`.
 - [x] Ingest → search → delete round-trip works without dropping the table.
@@ -407,7 +427,8 @@ support; it would add a dependency and a second rendering surface.
 | **Follow-up context as messages, not a rewritten prompt** | The graph already accepts a message list, so earlier turns are sent as normal user/assistant messages. The prompt stays one constant, and the CLI keeps asking standalone questions. Only the last six turns are sent, capped per turn, so retrieval still has room. The cache key includes them. |
 | **Source filter in the retrieval SQL, not after ranking** | Filtering after `FETCH APPROX` would silently shrink the candidate pool and change what each path can return. The predicate sits inside every query, so keyword, vector, hybrid and rerank all see the same one-document corpus. |
 | **Markdown export from the stored answer, not a second renderer** | The export is built by `ChatHistory` from the same rows the UI restores, so it carries the same text, sources and trace. No separate template can drift from what the screen shows. |
-| **Interactive terminal chat, not a full-screen TUI** | `ask.py --chat` reuses `Agent`, `ChatHistory` and the streaming callbacks, so it adds no SQL, no prompt text and no dependency. A Textual TUI would duplicate chat, history, search and settings in a second rendering surface, and `textual` is not installed. The terminal chat covers streaming, follow-ups, saved history and search; a TUI can wait until panes and mouse support are actually needed. |
+| **The TUI shares the contract instead of reimplementing it** | `tui.py` renders panes but keeps the same `Agent`, `ChatHistory` and `artifacts` calls as `app.py`, so a discussion or artefact saved in one surface opens in the other. The terminal chat stays for piping and headless tests; the TUI is for people who want panes and a mouse. |
+| **Artefacts are files, not a second store** | `artifacts.py` turns the same `Answer` rows the UI restores into Markdown, JSON and HTML. There is no artefact database to drift, and deleting a file cannot touch the corpus or a discussion. |
 | **Published dates in metadata, not a new column** | The corpus metadata is already JSON, and `published` is optional. A new column would force a schema migration and touch every ingest path. ISO strings compare lexically, so the date range is a plain `JSON_VALUE` predicate inside every retrieval query. Rows without a date are excluded from a range instead of being guessed into it. |
 | **Patch dates in place, not re-embed** | `JSON_MERGEPATCH` changes metadata only. Re-ingesting would recompute every embedding for no retrieval gain and would change row ids, which would invalidate saved answers and evaluation runs. The fingerprint is based on row count and id hash, so it stays stable. |
 | **Citations keep the tool's passage** | The retrieval tool already returns the exact chunk the model saw. Parsing that block into `snippet` and `published` means a click can show the evidence without a second search, and an older saved answer falls back to `source_passages()`. |
