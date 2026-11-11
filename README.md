@@ -9,6 +9,26 @@ rather stay in the console.
 
 Vision, principles and roadmap: [`VISION.md`](VISION.md).
 
+## Contents
+
+- [Quick start](#quick-start)
+- [Command line](#command-line)
+- [Terminal UI](#terminal-ui)
+- [Artefacts](#artefacts)
+- [MCP server](#mcp-server)
+- [Discussion history](#discussion-history)
+- [Streaming answers and follow-ups](#streaming-answers-and-follow-ups)
+- [Requirements](#requirements)
+- [The notebook](#the-notebook)
+- [The six surfaces](#the-six-surfaces)
+- [Layout](#layout)
+- [Tests](#tests)
+- [How retrieval works](#how-retrieval-works)
+- [Published dates, citations and the answer gate](#published-dates-citations-and-the-answer-gate)
+- [Troubleshooting](#troubleshooting)
+- [Data safety](#data-safety)
+- [Free tier](#free-tier)
+
 ---
 
 ## Quick start
