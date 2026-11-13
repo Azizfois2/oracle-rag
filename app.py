@@ -66,52 +66,87 @@ SELECT id, text, metadata, 1 - VECTOR_DISTANCE(embedding, :q, COSINE) AS sim
 --   shown score is min-max normalised within that candidate pool"""
 
 CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
 :root{
-  --ink:#1B1816; --ink2:#6B615A; --ink3:#948A82;
-  --line:#E4DBD4; --line-strong:#C9BDB4; --panel:#F3EDE8; --paper:#FAF7F4;
-  --surface:#FFFDFB; --surface-2:#F7F1EC; --mark:#F6DFC9;
-  --accent:#B23A2B; --accent-hover:#9C3123; --on-accent:#FFF8F6;
+  color-scheme:light;
+  --ink:#201D1B; --ink2:#665E58; --ink3:#91867D;
+  --line:#E6DFD9; --line-strong:#CFC3BA; --panel:#F1ECE7; --paper:#F8F5F2;
+  --surface:#FFFEFC; --surface-2:#F4EFEB; --surface-3:#ECE4DE; --mark:#F4DCC4;
+  --accent:#B84632; --accent-hover:#983724; --accent-2:#D5835E;
+  --accent-soft:rgba(184,70,50,.09); --on-accent:#FFF9F6;
   --kw:#8A5A0B; --vec:#20609C; --hyb:#1E6E48; --rer:#6B4B8A;
-  --warn:#9A6A00; --shadow:rgba(27,24,22,.12);
+  --warn:#9A6A00; --danger:#B84632; --ok:#247451;
+  --ok-soft:rgba(36,116,81,.09); --ambient:rgba(213,131,94,.12);
+  --chat-user:#F1EAE4; --focus:rgba(184,70,50,.18);
+  --shadow:rgba(45,34,28,.08); --shadow-lg:rgba(45,34,28,.14);
 }
 
 html, body, .stApp, [data-testid="stMarkdownContainer"], [data-testid="stWidgetLabel"]{
-  font-family: Inter, "Segoe UI", system-ui, sans-serif;
+  font-family:Inter,"Segoe UI",system-ui,sans-serif;
 }
-.stApp{ background:var(--paper); color:var(--ink); }
-.block-container{ padding-top:1.9rem; padding-bottom:4rem; max-width:1240px; }
+.stApp{
+  background:radial-gradient(circle at 82% -8%,var(--ambient),transparent 32rem),var(--paper);
+  color:var(--ink);
+}
+.block-container{ padding-top:2rem; padding-bottom:5rem; max-width:1280px; }
 #MainMenu, footer, [data-testid="stDecoration"],
 [data-testid="stStatusWidget"], [data-testid="stAppDeployButton"]{ display:none; }
-/* The header toolbar holds the button that reopens a collapsed sidebar.
-   Keep the toolbar itself visible; hide only the controls above. */
 [data-testid="stToolbar"]{ background:transparent; }
 [data-testid="stExpandSidebarButton"]{ display:inline-flex; }
 [data-testid="stExpandSidebarButton"] button{ color:var(--ink2); }
 [data-testid="stExpandSidebarButton"] button:hover{ color:var(--accent); }
 
-.appbar{ display:flex; align-items:flex-end; justify-content:space-between; gap:1rem;
-  border-bottom:1px solid var(--line); padding-bottom:.7rem; }
-.appbar .eyebrow{ font-family:"IBM Plex Mono",monospace; font-size:.66rem;
-  letter-spacing:.16em; text-transform:uppercase; color:var(--ink3); }
-.appbar h1{ font-size:1.45rem; font-weight:600; margin:.1rem 0 0; letter-spacing:-.02em; }
-.appbar .meta{ font-family:"IBM Plex Mono",monospace; font-size:.71rem;
-  color:var(--ink2); text-align:right; line-height:1.6; font-variant-numeric:tabular-nums; }
+.appbar{ display:flex; align-items:center; justify-content:space-between; gap:1.5rem;
+  padding:.25rem 0 1.35rem; }
+.appbar .brand{ display:flex; align-items:center; gap:.85rem; min-width:0; }
+.brand-mark{ display:grid; place-items:center; width:42px; height:42px; flex:0 0 42px;
+  border-radius:13px; background:linear-gradient(145deg,var(--accent-2),var(--accent));
+  color:var(--on-accent); font-size:1.15rem; font-weight:700; letter-spacing:-.08em;
+  box-shadow:0 8px 22px var(--shadow),inset 0 1px 0 rgba(255,255,255,.28); }
+.appbar .eyebrow{ font-family:"IBM Plex Mono",monospace; font-size:.61rem; font-weight:500;
+  letter-spacing:.17em; text-transform:uppercase; color:var(--accent); }
+.appbar h1{ font-size:1.65rem; font-weight:650; margin:.08rem 0 0; letter-spacing:-.045em;
+  line-height:1.15; }
+.appbar .meta{ font-family:"IBM Plex Mono",monospace; font-size:.67rem;
+  color:var(--ink2); text-align:right; line-height:1.65; font-variant-numeric:tabular-nums; }
+.status-pill{ display:inline-flex; align-items:center; padding:.18rem .55rem;
+  border:1px solid var(--line); border-radius:999px; background:var(--ok-soft);
+  color:var(--ok); font-family:Inter,"Segoe UI",system-ui,sans-serif; font-size:.68rem;
+  font-weight:600; letter-spacing:.01em; margin-bottom:.28rem; }
 
 .dot{ display:inline-block; width:6px; height:6px; border-radius:50%;
   background:var(--ink3); margin-right:.4rem; vertical-align:1px; }
-.dot.ok{ background:var(--hyb); } .dot.bad{ background:var(--accent); }
-.dot.warn{ background:var(--warn); }
+.dot.ok{ background:var(--ok); box-shadow:0 0 0 3px var(--ok-soft); }
+.dot.bad{ background:var(--danger); } .dot.warn{ background:var(--warn); }
 
-h2{ font-size:1.08rem; font-weight:600; letter-spacing:-.01em; margin:.1rem 0 .45rem; }
-h3{ font-size:.88rem; font-weight:600; margin:.2rem 0 .35rem; }
-p, li{ font-size:.89rem; line-height:1.6; }
-.small{ font-size:.77rem; color:var(--ink2); line-height:1.55; }
-mark{ background:var(--mark); color:var(--ink); padding:0 .1em; border-radius:2px; }
+h2{ font-size:1.12rem; font-weight:650; letter-spacing:-.025em; margin:.1rem 0 .55rem; }
+h3{ font-size:.9rem; font-weight:650; letter-spacing:-.015em; margin:.2rem 0 .4rem; }
+p, li{ font-size:.89rem; line-height:1.65; }
+.small{ font-size:.77rem; color:var(--ink2); line-height:1.6; }
+mark{ background:var(--mark); color:var(--ink); padding:.02em .16em; border-radius:4px; }
 .mono{ font-family:"IBM Plex Mono",ui-monospace,Consolas,monospace; font-variant-numeric:tabular-nums; }
 .kw-t{ color:var(--kw); } .vec-t{ color:var(--vec); } .hyb-t{ color:var(--hyb); }
 .rer-t{ color:var(--rer); }
+
+.welcome{ position:relative; overflow:hidden; margin:.35rem 0 1.35rem; padding:2rem 2.1rem;
+  border:1px solid var(--line); border-radius:20px;
+  background:linear-gradient(135deg,var(--surface),var(--surface-2));
+  box-shadow:0 18px 48px var(--shadow); }
+.welcome::after{ content:""; position:absolute; width:250px; height:250px; right:-90px; top:-125px;
+  border:42px solid var(--accent-soft); border-radius:50%; pointer-events:none; }
+.welcome>*{ position:relative; z-index:1; }
+.welcome .kicker{ font-family:"IBM Plex Mono",monospace; font-size:.62rem; font-weight:500;
+  letter-spacing:.15em; text-transform:uppercase; color:var(--accent); margin-bottom:.65rem; }
+.welcome h2{ max-width:38rem; font-size:clamp(1.65rem,3vw,2.25rem); font-weight:650;
+  line-height:1.15; letter-spacing:-.045em; margin:0 0 .65rem; }
+.welcome .lede{ max-width:43rem; color:var(--ink2); font-size:.91rem; margin:0; }
+.hero-stats{ display:flex; gap:.45rem; flex-wrap:wrap; margin-top:1.15rem; }
+.hero-stats span{ padding:.28rem .58rem; border:1px solid var(--line); border-radius:999px;
+  background:var(--surface); color:var(--ink2); font-family:"IBM Plex Mono",monospace;
+  font-size:.62rem; box-shadow:0 2px 8px var(--shadow); }
+.section-label{ margin:0 0 .65rem; color:var(--ink3); font-family:"IBM Plex Mono",monospace;
+  font-size:.62rem; font-weight:500; letter-spacing:.13em; text-transform:uppercase; }
 
 button[data-baseweb="tab"]{ font-size:.82rem; font-weight:500; color:var(--ink2); }
 button[data-baseweb="tab"][aria-selected="true"]{ color:var(--ink); }
@@ -119,56 +154,124 @@ div[data-baseweb="tab-highlight"]{ background:var(--accent); height:2px; }
 div[data-baseweb="tab-border"]{ background:var(--line); }
 
 .lab-head{ display:flex; justify-content:space-between; align-items:baseline;
-  border-bottom:1px solid var(--line); padding-bottom:.35rem; }
-.lab-head .name{ font-weight:600; font-size:.86rem; }
-.lab-head .name i{ display:inline-block; width:7px; height:7px; border-radius:2px;
-  margin-right:.4rem; vertical-align:1px; }
-.lab-head .lat{ font-family:"IBM Plex Mono",monospace; font-size:.68rem; color:var(--ink3); }
+  border-bottom:1px solid var(--line); padding-bottom:.5rem; }
+.lab-head .name{ font-weight:650; font-size:.86rem; letter-spacing:-.015em; }
+.lab-head .name i{ display:inline-block; width:7px; height:7px; border-radius:50%;
+  margin-right:.45rem; vertical-align:1px; box-shadow:0 0 0 3px var(--surface-2); }
+.lab-head .lat{ font-family:"IBM Plex Mono",monospace; font-size:.65rem; color:var(--ink3); }
 
-.row{ padding:.55rem 0 .5rem; border-bottom:1px solid var(--line); }
-.row-top{ display:flex; align-items:baseline; gap:.45rem; }
+.row{ padding:.85rem .95rem; margin-bottom:.6rem; border:1px solid var(--line);
+  border-radius:12px; background:var(--surface); box-shadow:0 3px 12px var(--shadow);
+  transition:border-color .18s ease,box-shadow .18s ease,transform .18s ease; }
+.row:hover{ border-color:var(--line-strong); box-shadow:0 8px 22px var(--shadow);
+  transform:translateY(-1px); }
+.row-top{ display:flex; align-items:baseline; gap:.5rem; }
 .rank{ font-family:"IBM Plex Mono",monospace; font-size:.72rem; font-weight:500; width:.9rem; }
 .src{ font-family:"IBM Plex Mono",monospace; font-size:.7rem; color:var(--ink2);
   flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .date{ font-family:"IBM Plex Mono",monospace; font-size:.62rem; color:var(--ink3);
   white-space:nowrap; }
 .score{ font-family:"IBM Plex Mono",monospace; font-size:.73rem; font-variant-numeric:tabular-nums; }
-.track{ height:2px; background:var(--line); margin:.35rem 0 .4rem; }
-.track>i{ display:block; height:100%; }
-.snip{ font-size:.79rem; line-height:1.5; }
-.tags{ margin-top:.3rem; display:flex; gap:.28rem; flex-wrap:wrap; }
-.tag{ font-family:"IBM Plex Mono",monospace; font-size:.6rem; letter-spacing:.05em;
+.track{ height:3px; background:var(--surface-3); margin:.45rem 0 .5rem; border-radius:99px;
+  overflow:hidden; }
+.track>i{ display:block; height:100%; border-radius:inherit; }
+.snip{ font-size:.8rem; line-height:1.55; }
+.tags{ margin-top:.45rem; display:flex; gap:.3rem; flex-wrap:wrap; }
+.tag{ font-family:"IBM Plex Mono",monospace; font-size:.58rem; letter-spacing:.04em;
   text-transform:uppercase; color:var(--ink2); border:1px solid var(--line);
-  padding:.04rem .3rem; border-radius:2px; }
+  background:var(--surface-2); padding:.12rem .38rem; border-radius:999px; }
 
 i.kw{ background:var(--kw); } i.vec{ background:var(--vec); } i.hyb{ background:var(--hyb); }
 i.rer{ background:var(--rer); }
 
-.panel{ border:1px solid var(--line); background:var(--surface); padding:.7rem .85rem; border-radius:3px; }
-.panel .k{ font-family:"IBM Plex Mono",monospace; font-size:.62rem; letter-spacing:.11em;
+.panel{ border:1px solid var(--line); background:var(--surface); padding:1.05rem 1.15rem;
+  border-radius:14px; box-shadow:0 8px 26px var(--shadow); }
+.panel .k{ font-family:"IBM Plex Mono",monospace; font-size:.6rem; letter-spacing:.12em;
   text-transform:uppercase; color:var(--ink3); }
-.panel .v{ font-size:.85rem; }
-.strip{ display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:1rem; }
+.panel .v{ font-size:.88rem; font-weight:500; margin-top:.18rem; }
+.strip{ display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:1.1rem; }
 
 section[data-testid="stSidebar"]{ background:var(--panel); border-right:1px solid var(--line); }
-section[data-testid="stSidebar"] .block-container{ padding-top:1.5rem; }
-.side-title{ font-size:1rem; font-weight:600; letter-spacing:-.01em; }
-.side-sub{ font-family:"IBM Plex Mono",monospace; font-size:.62rem; letter-spacing:.14em;
-  text-transform:uppercase; color:var(--ink3); margin-top:.15rem; }
-.kv{ display:flex; justify-content:space-between; gap:.6rem; font-size:.73rem; padding:.13rem 0; }
+section[data-testid="stSidebar"] .block-container{ padding-top:1.6rem; }
+.side-brand{ display:flex; align-items:center; gap:.65rem; margin-bottom:.3rem; }
+.side-brand .brand-mark{ width:32px; height:32px; flex-basis:32px; border-radius:10px;
+  font-size:.85rem; box-shadow:0 5px 16px var(--shadow); }
+.side-title{ font-size:.95rem; font-weight:650; letter-spacing:-.025em; }
+.side-sub{ font-family:"IBM Plex Mono",monospace; font-size:.58rem; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--ink3); margin-top:.12rem; }
+.kv{ display:flex; justify-content:space-between; align-items:center; gap:.6rem;
+  font-size:.73rem; padding:.18rem 0; }
 .kv span{ color:var(--ink3); } .kv b{ font-weight:500; font-family:"IBM Plex Mono",monospace; }
-.bar{ height:3px; background:var(--line); margin:.28rem 0 .1rem; }
-.bar>i{ display:block; height:100%; background:var(--accent); }
+.bar{ height:4px; background:var(--surface-3); margin:.35rem 0 .2rem; border-radius:99px;
+  overflow:hidden; }
+.bar>i{ display:block; height:100%; border-radius:inherit;
+  background:linear-gradient(90deg,var(--accent),var(--accent-2)); }
 
-[data-testid="stChatMessage"]{ background:transparent; padding:.15rem 0; }
+[data-testid="stChatMessage"]{ background:transparent; padding:.85rem 1rem; margin:.45rem 0;
+  border:1px solid transparent; border-radius:15px; }
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]){
+  background:var(--chat-user); border-color:var(--line); }
+[data-testid="stChatMessageAvatarUser"], [data-testid="stChatMessageAvatarAssistant"]{
+  border-radius:10px; }
+[data-testid="stChatMessageAvatarUser"]{ background:var(--surface-3)!important;
+  color:var(--ink2)!important; }
+[data-testid="stChatMessageAvatarAssistant"]{ background:var(--accent-soft)!important;
+  color:var(--accent)!important; }
 [data-testid="stChatMessageContent"]{ font-size:.89rem; }
 
-.stButton>button{ border-radius:3px; border:1px solid var(--line); background:var(--surface);
-  color:var(--ink); font-size:.8rem; font-weight:500; padding:.28rem .7rem; }
-.stButton>button:hover{ border-color:var(--line-strong); background:var(--surface-2); }
-.stButton>button[kind="primary"]{ background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
-.stButton>button[kind="primary"]:hover{ background:var(--accent-hover); border-color:var(--accent-hover); }
-[data-testid="stExpander"] details{ border:1px solid var(--line); border-radius:3px; background:var(--surface); }
+.stApp button[data-testid^="stBaseButton-"], .stButton>button,
+.stDownloadButton>button{ border-radius:10px; border:1px solid var(--line);
+  background:var(--surface); color:var(--ink); font-size:.79rem; font-weight:550;
+  padding:.4rem .8rem; min-height:2.35rem; box-shadow:0 2px 5px var(--shadow);
+  transition:background .16s ease,border-color .16s ease,box-shadow .16s ease,transform .16s ease; }
+.stApp button[data-testid^="stBaseButton-"]:hover, .stButton>button:hover,
+.stDownloadButton>button:hover{ border-color:var(--line-strong); background:var(--surface-2);
+  box-shadow:0 5px 14px var(--shadow); transform:translateY(-1px); }
+.stApp button[data-testid^="stBaseButton-"]:active, .stButton>button:active{ transform:translateY(0); }
+.stApp button[data-testid="stBaseButton-primary"], .stButton>button[kind="primary"]{
+  background:linear-gradient(135deg,var(--accent),var(--accent-hover));
+  border-color:var(--accent); color:var(--on-accent); box-shadow:0 6px 16px var(--shadow); }
+.stApp button[data-testid="stBaseButton-primary"]:hover, .stButton>button[kind="primary"]:hover{
+  background:linear-gradient(135deg,var(--accent-2),var(--accent));
+  border-color:var(--accent-hover); color:var(--on-accent); }
+.stApp button[data-testid^="stBaseButton-"]:focus-visible,
+.stApp [data-testid="stChatInputSubmitButton"]:focus-visible{
+  outline:3px solid var(--focus); outline-offset:2px; }
+
+.stApp [data-testid="stButtonGroup"]{ display:inline-flex; gap:.2rem; padding:.25rem;
+  border:1px solid var(--line); border-radius:12px; background:var(--surface-2); }
+.stApp [data-testid="stButtonGroup"] button{ border:1px solid transparent; border-radius:8px;
+  background:transparent; color:var(--ink2); box-shadow:none; font-size:.76rem;
+  min-height:2rem; padding:.3rem .75rem; }
+.stApp [data-testid="stButtonGroup"] button[data-selected],
+.stApp [data-testid="stButtonGroup"] button[aria-selected="true"],
+.stApp [data-testid="stButtonGroup"] button[aria-checked="true"]{
+  background:var(--surface); color:var(--ink); border-color:var(--line);
+  box-shadow:0 3px 10px var(--shadow); }
+
+.stApp [data-baseweb="input"], .stApp [data-baseweb="base-input"],
+.stApp [data-baseweb="textarea"], .stApp [data-baseweb="select"]>div{
+  border-radius:10px; box-shadow:0 2px 6px var(--shadow); }
+.stApp [data-baseweb="input"]:focus-within, .stApp [data-baseweb="base-input"]:focus-within,
+.stApp [data-baseweb="textarea"]:focus-within, .stApp [data-baseweb="select"]>div:focus-within{
+  border-color:var(--accent)!important; box-shadow:0 0 0 3px var(--focus)!important; }
+.stApp [data-testid="stCheckbox"] label:has(input[role="switch"]) > div:first-of-type{
+  background:var(--line-strong); border:1px solid var(--line-strong); }
+.stApp [data-testid="stCheckbox"] label:has(input[role="switch"]:checked) > div:first-of-type{
+  background:var(--accent); border-color:var(--accent); }
+.stApp [data-testid="stCheckbox"] label:has(input[role="switch"]) > div:first-of-type > div{
+  background:var(--surface); box-shadow:0 1px 4px var(--shadow-lg); }
+
+.stApp [data-testid="stBottom"]{ background:var(--paper); border-top:1px solid var(--line); }
+.stApp [data-testid="stChatInput"]>div{ border-radius:14px; box-shadow:0 8px 24px var(--shadow); }
+.stApp [data-testid="stChatInputSubmitButton"]{ border-radius:9px; }
+.stApp [data-testid="stExpander"] details{ border:1px solid var(--line); border-radius:12px;
+  background:var(--surface); overflow:hidden; box-shadow:0 3px 12px var(--shadow); }
+.stApp [data-testid="stExpander"] summary{ padding:.15rem .2rem; }
+.stApp [data-testid="stAlert"]{ border-radius:12px; }
+.stApp [data-testid="stDataFrame"], .stApp [data-testid="stTable"],
+.stApp [data-testid="stCodeBlock"]{ border:1px solid var(--line); border-radius:12px;
+  overflow:hidden; box-shadow:0 3px 12px var(--shadow); }
 hr{ border-color:var(--line); }
 
 /* Inline citation: [1] opens the passage on hover, focus or click. */
@@ -178,56 +281,282 @@ a.cite{ position:relative; display:inline; color:var(--accent);
 a.cite:hover, a.cite:focus{ text-decoration:underline; outline:none; }
 a.cite .cite-body{ display:none; position:absolute; left:0; top:1.45em;
   width:min(30rem,78vw); text-align:left; background:var(--surface); color:var(--ink);
-  border:1px solid var(--line); border-left:2px solid var(--accent);
-  padding:.5rem .65rem; box-shadow:0 6px 18px var(--shadow); z-index:60; }
+  border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:10px;
+  padding:.7rem .8rem; box-shadow:0 12px 32px var(--shadow-lg); z-index:60; }
 a.cite:hover .cite-body, a.cite:focus .cite-body,
 a.cite:target .cite-body{ display:block; }
 a.cite .cite-meta{ display:block; font-size:.62rem; color:var(--ink3);
-  margin-bottom:.2rem; }
+  margin-bottom:.25rem; }
 a.cite .cite-text{ display:block; font-family:Inter,"Segoe UI",system-ui,sans-serif;
-  font-size:.78rem; line-height:1.5; white-space:normal; }
+  font-size:.78rem; line-height:1.55; white-space:normal; }
+
+@media (max-width:700px){
+  .block-container{ padding:1.25rem 1rem 4rem; }
+  .appbar{ align-items:flex-start; flex-direction:column; gap:.85rem; }
+  .appbar .meta{ text-align:left; }
+  .welcome{ padding:1.45rem 1.25rem; border-radius:16px; }
+  .row{ padding:.75rem; }
+  .date{ display:none; }
+}
+@media (prefers-reduced-motion:reduce){
+  .stApp *, .stApp *::before, .stApp *::after{ transition:none!important; }
+}
 """
 
 DARK_CSS = """
 :root{
   color-scheme:dark;
-  --ink:#F2EAE3; --ink2:#B8ACA3; --ink3:#8C8179;
-  --line:#3A322D; --line-strong:#544941; --panel:#211D1A; --paper:#171412;
-  --surface:#1E1A17; --surface-2:#2A2521; --mark:#5A3A22;
-  --accent:#E06A55; --accent-hover:#F07C66; --on-accent:#1B1010;
-  --kw:#E0B05A; --vec:#79B4E8; --hyb:#6FD3A2; --rer:#C3A0E8;
-  --warn:#D9A441; --shadow:rgba(0,0,0,.55);
+  --ink:#F4EDE7; --ink2:#C3B7AD; --ink3:#95887E;
+  --line:#39322D; --line-strong:#5B4E45; --panel:#1B1815; --paper:#12100F;
+  --surface:#1D1A17; --surface-2:#27221F; --surface-3:#332C27; --mark:#5C3B22;
+  --accent:#E47760; --accent-hover:#F08A72; --accent-2:#C98A68;
+  --accent-soft:rgba(228,119,96,.13); --on-accent:#21110D;
+  --kw:#E6B45E; --vec:#82BCEF; --hyb:#75D8A8; --rer:#CBAAED;
+  --warn:#E0AC4C; --danger:#FF9C8A; --ok:#75D8A8;
+  --ok-soft:rgba(117,216,168,.1); --ambient:rgba(228,119,96,.08);
+  --chat-user:#24201C; --focus:rgba(228,119,96,.32);
+  --shadow:rgba(0,0,0,.32); --shadow-lg:rgba(0,0,0,.5);
 }
-/* Streamlit keeps some widgets on its own light palette. These selectors
-   follow the toggle so inputs, chat, tables and popovers stay readable. */
+
+/* ---- shell -------------------------------------------------------------- */
+.stApp{
+  background:radial-gradient(circle at 82% -8%,var(--ambient),transparent 32rem),var(--paper)!important;
+  color:var(--ink)!important;
+}
+[data-testid="stAppViewContainer"], [data-testid="stMain"],
+[data-testid="stHeader"], [data-testid="stMainBlockContainer"]{
+  background:transparent!important; color:var(--ink)!important;
+}
+[data-testid="stHeader"], [data-testid="stToolbar"]{ background:transparent!important; }
+[data-testid="stToolbar"]{ color:var(--ink2)!important; }
+
+section[data-testid="stSidebar"], [data-testid="stSidebarContent"],
+[data-testid="stSidebarUserContent"]{
+  background:var(--panel)!important; color:var(--ink)!important;
+}
+section[data-testid="stSidebar"]{ border-right:1px solid var(--line-strong)!important; }
+
+[data-testid="stBottom"], [data-testid="stBottomBlockContainer"]{
+  background:var(--paper)!important;
+}
+[data-testid="stBottom"]{ border-top:1px solid var(--line)!important; }
+
+/* ---- text --------------------------------------------------------------- */
+/* Streamlit paints most copy from its own light palette, so the base colour
+   has to be forced here rather than inherited from .stApp alone. */
+.stApp [data-testid="stMarkdownContainer"],
+.stApp [data-testid="stChatMessageContent"]{ color:var(--ink)!important; }
+.stApp p, .stApp li, .stApp h1, .stApp h2, .stApp h3, .stApp h4,
+.stApp h5, .stApp h6, .stApp label, .stApp legend, .stApp summary,
+.stApp blockquote, .stApp td, .stApp th, .stApp dt, .stApp dd,
+.stApp figcaption, .stApp caption{ color:var(--ink)!important; }
+.stApp [data-testid="stWidgetLabel"],
+.stApp [data-testid="stWidgetLabel"] *{ color:var(--ink)!important; }
+.stApp [data-testid="stCaptionContainer"],
+.stApp [data-testid="stCaptionContainer"] *{ color:var(--ink3)!important; }
+.stApp a{ color:var(--accent)!important; }
+.stApp a:hover{ color:var(--accent-hover)!important; }
+.stApp ::selection{ background:var(--accent); color:var(--on-accent); }
+
+/* the muted roles the custom HTML relies on */
+.stApp .small, .stApp .appbar .meta, .stApp .src, .stApp .tag,
+.stApp .welcome .lede{ color:var(--ink2)!important; }
+.stApp .appbar .eyebrow, .stApp .side-sub, .stApp .kv span,
+.stApp .lab-head .lat, .stApp .date, .stApp .panel .k,
+.stApp .section-label, .stApp .cite-meta{ color:var(--ink3)!important; }
+.stApp .kw-t{ color:var(--kw)!important; }
+.stApp .vec-t{ color:var(--vec)!important; }
+.stApp .hyb-t{ color:var(--hyb)!important; }
+.stApp .rer-t{ color:var(--rer)!important; }
+.stApp mark{ background:var(--mark)!important; color:var(--ink)!important; }
+
+/* ---- buttons ------------------------------------------------------------ */
+/* Match buttons by their test id: st.button(..., help=...) wraps the button in
+   a tooltip span, so the old .stButton > button child selector misses it. */
+.stApp button[data-testid^="stBaseButton-"]{
+  background:var(--surface)!important; color:var(--ink)!important;
+  border:1px solid var(--line)!important; box-shadow:none!important;
+}
+.stApp button[data-testid^="stBaseButton-"]:hover{
+  background:var(--surface-2)!important; border-color:var(--line-strong)!important;
+  color:var(--ink)!important;
+}
+.stApp button[data-testid="stBaseButton-primary"]{
+  background:linear-gradient(135deg,var(--accent),var(--accent-hover))!important;
+  border-color:var(--accent)!important; color:var(--on-accent)!important;
+  box-shadow:0 6px 18px var(--shadow)!important;
+}
+.stApp button[data-testid="stBaseButton-primary"]:hover{
+  background:linear-gradient(135deg,var(--accent-2),var(--accent))!important;
+  border-color:var(--accent-hover)!important; color:var(--on-accent)!important;
+}
+.stApp button[data-testid="stBaseButton-header"],
+.stApp button[data-testid="stBaseButton-headerNoPadding"]{
+  background:transparent!important; border-color:transparent!important;
+  color:var(--ink2)!important;
+}
+.stApp button[data-testid^="stBaseButton-"]:disabled{
+  background:var(--surface)!important; color:var(--ink3)!important;
+  border-color:var(--line)!important; opacity:.55;
+}
+.stApp button[data-testid^="stBaseButton-"]:focus-visible,
+.stApp [data-testid="stChatInputSubmitButton"]:focus-visible{
+  outline:2px solid var(--focus)!important; outline-offset:1px;
+}
+
+/* section switcher (st.segmented_control) */
+.stApp [data-testid="stButtonGroup"]{
+  background:var(--surface-2)!important; border:1px solid var(--line)!important;
+}
+.stApp [data-testid="stButtonGroup"] button{
+  background:transparent!important; color:var(--ink2)!important;
+  border:1px solid transparent!important; box-shadow:none!important;
+}
+.stApp [data-testid="stButtonGroup"] button:hover{
+  background:var(--surface-3)!important; color:var(--ink)!important;
+}
+.stApp [data-testid="stButtonGroup"] button[data-selected],
+.stApp [data-testid="stButtonGroup"] button[aria-selected="true"],
+.stApp [data-testid="stButtonGroup"] button[aria-checked="true"]{
+  background:var(--surface)!important; color:var(--ink)!important;
+  border-color:var(--line)!important; box-shadow:0 3px 10px var(--shadow)!important;
+}
+
+/* ---- fields and menus --------------------------------------------------- */
 .stApp [data-baseweb="input"], .stApp [data-baseweb="base-input"],
-.stApp [data-baseweb="textarea"], .stApp [data-baseweb="select"] > div{
+.stApp [data-baseweb="textarea"], .stApp [data-baseweb="select"]>div{
   background:var(--surface)!important; color:var(--ink)!important;
   border-color:var(--line)!important;
 }
-.stApp [data-baseweb="select"] div, .stApp [data-baseweb="menu"],
-.stApp [data-baseweb="popover"] ul{ background:var(--surface)!important; color:var(--ink)!important; }
-.stApp [data-baseweb="menu"] li:hover, .stApp [data-baseweb="popover"] li:hover{
+.stApp [data-baseweb="input"] input, .stApp [data-baseweb="base-input"] input,
+.stApp [data-baseweb="textarea"] textarea, .stApp [data-baseweb="select"] input{
+  background:transparent!important; color:var(--ink)!important;
+  caret-color:var(--accent);
+}
+.stApp input::placeholder, .stApp textarea::placeholder{
+  color:var(--ink3)!important; opacity:1;
+}
+[data-baseweb="menu"], [data-baseweb="popover"]>div,
+[data-baseweb="popover"] ul{
+  background:var(--surface)!important; color:var(--ink)!important;
+  border-color:var(--line)!important;
+}
+[data-baseweb="menu"] li{ color:var(--ink)!important; }
+[data-baseweb="menu"] li:hover, [data-baseweb="menu"] li[aria-selected="true"]{
   background:var(--surface-2)!important;
 }
-.stApp [data-testid="stChatInput"]{ background:var(--surface)!important;
-  border:1px solid var(--line)!important; border-radius:4px; }
-.stApp [data-testid="stChatInput"] textarea{ color:var(--ink)!important; }
+[data-baseweb="tooltip"]{ background:var(--surface-2)!important; color:var(--ink)!important; }
+
+/* ---- chat --------------------------------------------------------------- */
+.stApp [data-testid="stChatMessage"]{ background:transparent!important; }
+.stApp [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]){
+  background:var(--chat-user)!important;
+}
+.stApp [data-testid="stChatInput"]{ color:var(--ink)!important; }
+.stApp [data-testid="stChatInput"]>div{
+  background:var(--surface)!important; border-color:var(--line)!important;
+}
+.stApp [data-testid="stChatInputTextArea"]{
+  background:transparent!important; color:var(--ink)!important;
+}
+.stApp [data-testid="stChatInputTextArea"]::placeholder{ color:var(--ink3)!important; }
+.stApp [data-testid="stChatInputSubmitButton"]{
+  background:var(--accent)!important; color:var(--on-accent)!important;
+}
+.stApp [data-testid="stChatInputSubmitButton"]:hover{
+  background:var(--accent-hover)!important;
+}
+.stApp [data-testid="stChatInputSubmitButton"]:disabled{
+  background:var(--surface-2)!important; color:var(--ink3)!important;
+}
+
+/* ---- containers --------------------------------------------------------- */
+.stApp [data-testid="stExpander"] details{
+  background:var(--surface)!important; border:1px solid var(--line)!important;
+  color:var(--ink)!important;
+}
+.stApp [data-testid="stExpander"] summary{
+  background:transparent!important; color:var(--ink)!important;
+}
+.stApp [data-testid="stExpander"] summary:hover{ background:var(--surface-2)!important; }
+.stApp [data-testid="stForm"]{ background:transparent!important; border-color:var(--line)!important; }
+.stApp hr, .stApp [data-testid="stDivider"]{
+  border-color:var(--line)!important; background:var(--line)!important;
+}
+.stApp [data-testid="stToast"]{
+  background:var(--surface)!important; color:var(--ink)!important;
+  border:1px solid var(--line)!important;
+}
+.stApp [data-testid="stFileUploader"] section,
+.stApp [data-testid="stFileUploaderDropzone"]{
+  background:var(--surface)!important; border-color:var(--line)!important;
+  color:var(--ink)!important;
+}
+.stApp [data-testid="stFileUploaderDropzone"]:hover{ background:var(--surface-2)!important; }
+
+/* ---- status, alerts and code ------------------------------------------- */
+.stApp [data-testid="stAlertContainer"], .stApp [data-testid="stAlert"]{
+  background:var(--surface-2)!important; border:1px solid var(--line)!important;
+  color:var(--ink)!important;
+}
+.stApp [data-testid="stAlertContentError"],
+.stApp [data-testid="stAlertContentError"] *{ color:var(--danger)!important; }
+.stApp [data-testid="stAlertContentWarning"],
+.stApp [data-testid="stAlertContentWarning"] *{ color:var(--warn)!important; }
+.stApp [data-testid="stAlertContentSuccess"],
+.stApp [data-testid="stAlertContentSuccess"] *{ color:var(--ok)!important; }
+.stApp [data-testid="stAlertContentInfo"],
+.stApp [data-testid="stAlertContentInfo"] *{ color:var(--vec)!important; }
+.stApp pre, .stApp code, .stApp [data-testid="stCodeBlock"] pre{
+  background:var(--surface-2)!important; color:var(--ink)!important;
+  border-color:var(--line)!important;
+}
+.stApp [data-testid="stCodeBlock"] code{ background:transparent!important; }
+.stApp .token.comment, .stApp .token.prolog, .stApp .token.doctype,
+.stApp .token.cdata{ color:var(--ink3)!important; }
+.stApp .token.punctuation{ color:var(--ink2)!important; }
+.stApp .token.property, .stApp .token.tag, .stApp .token.constant,
+.stApp .token.symbol, .stApp .token.deleted{ color:var(--danger)!important; }
+.stApp .token.boolean, .stApp .token.number{ color:var(--kw)!important; }
+.stApp .token.selector, .stApp .token.attr-name, .stApp .token.string,
+.stApp .token.char, .stApp .token.builtin, .stApp .token.inserted{ color:var(--hyb)!important; }
+.stApp .token.operator, .stApp .token.entity, .stApp .token.url{ color:var(--ink2)!important; }
+.stApp .token.atrule, .stApp .token.attr-value, .stApp .token.keyword{ color:var(--vec)!important; }
+.stApp .token.function, .stApp .token.class-name{ color:var(--rer)!important; }
+
+/* ---- tables, metrics and progress -------------------------------------- */
 .stApp [data-testid="stDataFrame"], .stApp [data-testid="stTable"]{
   background:var(--surface)!important; color:var(--ink)!important;
+  border-color:var(--line)!important;
 }
 .stApp [data-testid="stDataFrame"] [role="columnheader"]{ background:var(--surface-2)!important; }
-.stApp [data-testid="stAlert"]{ background:var(--surface-2)!important; }
-.stApp [data-testid="stCodeBlock"] pre, .stApp [data-testid="stCode"]{
-  background:var(--surface)!important; color:var(--ink)!important;
+.stApp [data-testid="stTable"] th{ background:var(--surface-2)!important; }
+.stApp [data-testid="stTable"] td, .stApp [data-testid="stTable"] th{
+  border-color:var(--line)!important;
 }
-.stApp [data-testid="stMetricValue"], .stApp [data-testid="stMetricLabel"]{ color:var(--ink)!important; }
-.stApp [data-testid="stSidebar"] .stButton>button{ background:var(--surface); }
+.stApp [data-testid="stMetric"] *{ color:var(--ink)!important; }
+.stApp [data-testid="stMetricLabel"]{ color:var(--ink2)!important; }
+.stApp [data-testid="stProgress"]>div{ background:var(--surface-2)!important; }
+.stApp [data-testid="stProgress"]>div>div{ background:var(--accent)!important; }
 .stApp [data-testid="stStatusWidget"]{ filter:invert(1); }
-.stApp [data-testid="stSegmentedControl"] button{ color:var(--ink2); }
-.stApp [data-testid="stSegmentedControl"] button[aria-checked="true"]{
-  background:var(--surface); color:var(--ink);
+
+/* ---- tabs, chrome and scrollbars --------------------------------------- */
+.stApp button[data-baseweb="tab"]{
+  background:transparent!important; color:var(--ink2)!important;
 }
+.stApp button[data-baseweb="tab"][aria-selected="true"]{ color:var(--ink)!important; }
+.stApp [data-baseweb="tab-highlight"]{ background:var(--accent)!important; }
+.stApp [data-baseweb="tab-border"]{ background:var(--line)!important; }
+[data-testid="stExpandSidebarButton"] button,
+[data-testid="stSidebarCollapseButton"] button{ color:var(--ink2)!important; }
+[data-testid="stExpandSidebarButton"] button:hover,
+[data-testid="stSidebarCollapseButton"] button:hover{ color:var(--accent)!important; }
+.stApp *::-webkit-scrollbar{ width:10px; height:10px; }
+.stApp *::-webkit-scrollbar-track{ background:var(--paper); }
+.stApp *::-webkit-scrollbar-thumb{
+  background:var(--line-strong); border-radius:8px; border:2px solid var(--paper);
+}
+.stApp *::-webkit-scrollbar-thumb:hover{ background:var(--ink3); }
 """
 
 
@@ -421,8 +750,10 @@ def render_sidebar(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
 
     with st.sidebar:
         st.markdown(
+            '<div class="side-brand"><div class="brand-mark">O</div><div>'
             '<div class="side-title">Oracle RAG Console</div>'
-            '<div class="side-sub">26ai · local</div>',
+            '<div class="side-sub">26ai · private intelligence</div>'
+            '</div></div>',
             unsafe_allow_html=True,
         )
         st.toggle(
@@ -928,12 +1259,17 @@ def tab_ask(settings: rc.Settings, agent: rc.Agent, history: rc.ChatHistory,
     chat = st.session_state.chat
     if not chat and not st.session_state.get("pending"):
         st.markdown(
-            f'<p class="small">{stats.get("sources", 0)} documents, '
-            f'{stats.get("rows", 0)} chunks, indexed in Oracle 26ai. '
-            "Answers cite the document they came from.</p>",
+            '<div class="welcome"><div class="kicker">Grounded answers, clear sources</div>'
+            '<h2>Your corpus, ready to answer.</h2>'
+            '<p class="lede">Ask across your private knowledge with Oracle 26ai. '
+            'Every answer stays connected to the passages that support it.</p>'
+            f'<div class="hero-stats"><span>{stats.get("sources", 0)} documents</span>'
+            f'<span>{stats.get("rows", 0)} indexed chunks</span>'
+            '<span>local &amp; private</span></div></div>',
             unsafe_allow_html=True,
         )
-        st.markdown("<div style='height:.3rem'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="section-label">Start with a question</div>',
+                    unsafe_allow_html=True)
         columns = st.columns(2)
         for index, suggestion in enumerate(SUGGESTIONS):
             if columns[index % 2].button(suggestion, key=f"sug{index}"):
@@ -1926,8 +2262,9 @@ def tab_health(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
 def render_db_down(db: dict, settings: rc.Settings) -> None:
     docker = rc.container_status()
     st.markdown(
-        f'<div class="appbar"><div><div class="eyebrow">Oracle 26ai · local</div>'
-        f"<h1>RAG Console</h1></div>"
+        f'<div class="appbar"><div class="brand"><div class="brand-mark">O</div><div>'
+        f'<div class="eyebrow">Oracle 26ai · private intelligence</div>'
+        f"<h1>RAG Console</h1></div></div>"
         f'<div class="meta"><div><span class="dot bad"></span>database offline</div>'
         f'<div>{esc(settings.dsn)}</div></div></div>',
         unsafe_allow_html=True,
@@ -1990,11 +2327,13 @@ def main() -> None:
     render_sidebar(settings, engine, agent, history, stats, db)
 
     st.markdown(
-        f'<div class="appbar"><div><div class="eyebrow">Oracle 26ai · local</div>'
-        f"<h1>RAG Console</h1></div>"
+        f'<div class="appbar"><div class="brand"><div class="brand-mark">O</div><div>'
+        f'<div class="eyebrow">Oracle 26ai · private intelligence</div>'
+        f"<h1>RAG Console</h1></div></div>"
         f'<div class="meta">'
-        f'<div><span class="dot ok"></span>connected · ping {db.get("ms", "?")} ms</div>'
-        f'<div>{stats.get("sources", 0)} sources · {stats.get("rows", 0)} chunks</div>'
+        f'<div class="status-pill"><span class="dot ok"></span>Connected</div>'
+        f'<div>{stats.get("sources", 0)} sources · {stats.get("rows", 0)} chunks · '
+        f'ping {db.get("ms", "?")} ms</div>'
         f'<div>quota {agent.quota.status()["spent"]} / '
         f'{settings.daily_limit * max(1, len(settings.models()))} today</div>'
         f"</div></div>",

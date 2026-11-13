@@ -75,11 +75,16 @@ def main() -> int:
     dark = [t for t in at.toggle if t.key == "dark_mode"]
     if dark:
         dark[0].set_value(True).run()
+        body = markdown_text(at)
         check("dark palette is applied",
-              "--paper:#171412" in markdown_text(at), "dark CSS variables present")
+              "color-scheme:dark" in body and "--paper:#12100F" in body,
+              "dark CSS variables present")
+        check("dark native widgets are themed",
+              ".stApp [data-testid=\"stChatInputTextArea\"]" in body
+              and "background:var(--chat-user)!important" in body)
         at.toggle(key="dark_mode").set_value(False).run()
         check("light palette returns",
-              "--paper:#171412" not in markdown_text(at))
+              "color-scheme:dark" not in markdown_text(at))
 
     print("\n== search lab ==")
     at.segmented_control[0].set_value("Search lab").run()
