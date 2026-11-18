@@ -306,21 +306,27 @@ a.cite .cite-text{ display:block; font-family:Inter,"Segoe UI",system-ui,sans-se
 DARK_CSS = """
 :root{
   color-scheme:dark;
-  --ink:#F4EDE7; --ink2:#C3B7AD; --ink3:#95887E;
-  --line:#39322D; --line-strong:#5B4E45; --panel:#1B1815; --paper:#12100F;
-  --surface:#1D1A17; --surface-2:#27221F; --surface-3:#332C27; --mark:#5C3B22;
-  --accent:#E47760; --accent-hover:#F08A72; --accent-2:#C98A68;
-  --accent-soft:rgba(228,119,96,.13); --on-accent:#21110D;
-  --kw:#E6B45E; --vec:#82BCEF; --hyb:#75D8A8; --rer:#CBAAED;
-  --warn:#E0AC4C; --danger:#FF9C8A; --ok:#75D8A8;
-  --ok-soft:rgba(117,216,168,.1); --ambient:rgba(228,119,96,.08);
-  --chat-user:#24201C; --focus:rgba(228,119,96,.32);
-  --shadow:rgba(0,0,0,.32); --shadow-lg:rgba(0,0,0,.5);
+  /* Warm graphite, not black. Every neutral keeps a trace of the terracotta
+     accent, so the dark ground belongs to the same product as the light one. */
+  --ink:#EDE5DC; --ink2:#B5A79B; --ink3:#9A8D81;
+  --line:#3B322B; --line-strong:#5C4E44; --panel:#1C1714; --paper:#15120F;
+  --surface:#2A2420; --surface-2:#342D28; --surface-3:#41372F; --mark:#5A3D24;
+  --accent:#D9765E; --accent-hover:#E88C72; --accent-2:#E8A184;
+  --accent-soft:rgba(217,118,94,.12); --on-accent:#1B0F0B;
+  --kw:#D9A75A; --vec:#7FB6E8; --hyb:#6FCFA1; --rer:#C2A2E4;
+  --warn:#D8A64A; --danger:#F0937F; --ok:#6FCFA1;
+  --ok-soft:rgba(111,207,161,.1); --ambient:rgba(217,118,94,.12);
+  --chat-user:#332A24; --focus:rgba(217,118,94,.34);
+  --shadow:rgba(0,0,0,.5); --shadow-lg:rgba(0,0,0,.7);
+  --hairline:rgba(255,255,255,.06);
 }
 
 /* ---- shell -------------------------------------------------------------- */
 .stApp{
-  background:radial-gradient(circle at 82% -8%,var(--ambient),transparent 32rem),var(--paper)!important;
+  background:
+    radial-gradient(circle at 78% -10%,var(--ambient),transparent 38rem),
+    radial-gradient(circle at 4% 108%,rgba(232,161,132,.06),transparent 32rem),
+    linear-gradient(180deg,#1B1613 0%,var(--paper) 42rem,#120F0D 100%)!important;
   color:var(--ink)!important;
 }
 [data-testid="stAppViewContainer"], [data-testid="stMain"],
@@ -332,9 +338,10 @@ DARK_CSS = """
 
 section[data-testid="stSidebar"], [data-testid="stSidebarContent"],
 [data-testid="stSidebarUserContent"]{
-  background:var(--panel)!important; color:var(--ink)!important;
+  background:linear-gradient(180deg,#1A1513,var(--panel))!important;
+  color:var(--ink)!important;
 }
-section[data-testid="stSidebar"]{ border-right:1px solid var(--line-strong)!important; }
+section[data-testid="stSidebar"]{ border-right:1px solid var(--line)!important; }
 
 [data-testid="stBottom"], [data-testid="stBottomBlockContainer"]{
   background:var(--paper)!important;
@@ -447,6 +454,67 @@ section[data-testid="stSidebar"]{ border-right:1px solid var(--line-strong)!impo
 }
 [data-baseweb="tooltip"]{ background:var(--surface-2)!important; color:var(--ink)!important; }
 
+/* ---- materials ---------------------------------------------------------- */
+/* A drop shadow alone disappears on a near-black ground. Every raised plane
+   gets a hairline of light along its top edge, so the ambient glow has
+   something to catch and the surface reads as a material instead of a hole. */
+.stApp .welcome{
+  box-shadow:0 24px 60px var(--shadow-lg),inset 0 1px 0 var(--hairline)!important;
+}
+.stApp .panel{
+  box-shadow:0 10px 30px var(--shadow),inset 0 1px 0 var(--hairline)!important;
+}
+.stApp .row{
+  box-shadow:0 4px 14px var(--shadow),inset 0 1px 0 var(--hairline)!important;
+}
+.stApp .row:hover{
+  box-shadow:0 10px 26px var(--shadow-lg),inset 0 1px 0 var(--hairline)!important;
+}
+.stApp .hero-stats span, .stApp .tag{
+  box-shadow:inset 0 1px 0 var(--hairline)!important;
+}
+.stApp .brand-mark{
+  box-shadow:0 10px 26px var(--shadow-lg),inset 0 1px 0 rgba(255,255,255,.18)!important;
+}
+.stApp button[data-testid^="stBaseButton-"]{
+  box-shadow:inset 0 1px 0 var(--hairline)!important;
+}
+.stApp button[data-testid^="stBaseButton-"]:hover{
+  box-shadow:0 6px 16px var(--shadow),inset 0 1px 0 var(--hairline)!important;
+}
+.stApp button[data-testid="stBaseButton-header"],
+.stApp button[data-testid="stBaseButton-headerNoPadding"]{ box-shadow:none!important; }
+.stApp button[data-testid="stBaseButton-primary"]{
+  box-shadow:0 10px 24px var(--shadow-lg),inset 0 1px 0 rgba(255,255,255,.16)!important;
+}
+.stApp button[data-testid="stBaseButton-primary"]:hover{
+  box-shadow:0 12px 28px var(--shadow-lg),inset 0 1px 0 rgba(255,255,255,.18)!important;
+}
+.stApp [data-testid="stButtonGroup"]{
+  box-shadow:inset 0 1px 0 var(--hairline)!important;
+}
+.stApp [data-testid="stButtonGroup"] button[data-selected],
+.stApp [data-testid="stButtonGroup"] button[aria-selected="true"],
+.stApp [data-testid="stButtonGroup"] button[aria-checked="true"]{
+  box-shadow:0 4px 12px var(--shadow),inset 0 1px 0 var(--hairline)!important;
+}
+.stApp [data-baseweb="input"], .stApp [data-baseweb="base-input"],
+.stApp [data-baseweb="textarea"], .stApp [data-baseweb="select"]>div{
+  box-shadow:0 2px 8px var(--shadow),inset 0 1px 0 var(--hairline)!important;
+}
+.stApp [data-testid="stChatInput"]>div{
+  box-shadow:0 10px 28px var(--shadow-lg),inset 0 1px 0 var(--hairline)!important;
+}
+.stApp [data-testid="stExpander"] details,
+.stApp [data-testid="stCodeBlock"],
+.stApp [data-testid="stDataFrame"],
+.stApp [data-testid="stTable"]{
+  box-shadow:0 4px 14px var(--shadow),inset 0 1px 0 var(--hairline)!important;
+}
+.stApp a.cite .cite-body{
+  box-shadow:0 16px 40px var(--shadow-lg),inset 0 1px 0 var(--hairline)!important;
+}
+
 /* ---- chat --------------------------------------------------------------- */
 .stApp [data-testid="stChatMessage"]{ background:transparent!important; }
 .stApp [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]){
@@ -529,6 +597,11 @@ section[data-testid="stSidebar"]{ border-right:1px solid var(--line-strong)!impo
   background:var(--surface)!important; color:var(--ink)!important;
   border-color:var(--line)!important;
 }
+/* The data grid paints its own canvas, so CSS colours never reach the cells.
+   A gentle inversion maps Streamlit's light grid onto the graphite palette. */
+.stApp [data-testid="stDataFrame"] canvas{
+  filter:invert(.92) hue-rotate(180deg) saturate(.9);
+}
 .stApp [data-testid="stDataFrame"] [role="columnheader"]{ background:var(--surface-2)!important; }
 .stApp [data-testid="stTable"] th{ background:var(--surface-2)!important; }
 .stApp [data-testid="stTable"] td, .stApp [data-testid="stTable"] th{
@@ -538,7 +611,6 @@ section[data-testid="stSidebar"]{ border-right:1px solid var(--line-strong)!impo
 .stApp [data-testid="stMetricLabel"]{ color:var(--ink2)!important; }
 .stApp [data-testid="stProgress"]>div{ background:var(--surface-2)!important; }
 .stApp [data-testid="stProgress"]>div>div{ background:var(--accent)!important; }
-.stApp [data-testid="stStatusWidget"]{ filter:invert(1); }
 
 /* ---- tabs, chrome and scrollbars --------------------------------------- */
 .stApp button[data-baseweb="tab"]{

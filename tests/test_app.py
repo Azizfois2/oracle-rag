@@ -77,8 +77,12 @@ def main() -> int:
         dark[0].set_value(True).run()
         body = markdown_text(at)
         check("dark palette is applied",
-              "color-scheme:dark" in body and "--paper:#12100F" in body,
+              "color-scheme:dark" in body and "--paper:#15120F" in body,
               "dark CSS variables present")
+        check("dark surfaces carry depth",
+              "--hairline:rgba(255,255,255,.06)" in body
+              and "inset 0 1px 0 var(--hairline)" in body,
+              "raised planes keep a light edge")
         check("dark native widgets are themed",
               ".stApp [data-testid=\"stChatInputTextArea\"]" in body
               and "background:var(--chat-user)!important" in body)

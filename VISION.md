@@ -187,9 +187,10 @@ beyond a few seconds.
 
 **A query console, not a chatbot skin.**
 
-- Graphite ground, one brand accent (Oracle red `#C74634`), everything else quiet.
-  The sidebar's **Dark mode** toggle swaps the same palette to a warm dark ground;
-  the terminal UI starts dark and switches with `ctrl+t`.
+- Graphite ground, one brand accent (Oracle red `#B23A2B`), everything else quiet.
+  The sidebar's **Dark mode** toggle keeps the same layered surfaces and soft
+  elevation on a warm graphite ground; the terminal UI starts dark and switches
+  with `ctrl+t`.
 - **Colour carries meaning:** amber = keyword, blue = vector, green = hybrid,
   purple = reranked. The same four colours appear in the lab, the trace and the
   eval table.
