@@ -448,7 +448,8 @@ an artefact and lists it on the Artefacts page, then deletes that test thread.
 in a temporary folder. `test_tui.py` mounts the Textual app headlessly, toggles
 its theme, asks a fake local question, saves an artefact and runs the pane
 commands. `run_all.py` runs all nine suites in turn and prints one pass or fail
-summary.
+summary; if `textual` is missing it skips the TUI suite with a note instead of
+failing the run, and `pip install -r requirements.txt` adds it.
 
 ---
 

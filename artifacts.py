@@ -259,7 +259,7 @@ def answer_markdown(question: str, answer: rc.Answer, *,
     if answer.steps:
         lines += ["## Trace", ""]
         for step in answer.steps:
-            detail = f" — {step.detail}" if step.detail else ""
+            detail = f" - {step.detail}" if step.detail else ""
             lines.append(f"- `{step.kind}` **{step.label}**{detail}")
         lines.append("")
 

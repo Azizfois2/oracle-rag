@@ -2,11 +2,11 @@
 .env
 .streamlit/secrets.toml
 
-# runtime state (quota counters, last eval run) — local, disposable
+# runtime state (quota counters, last eval run) - local, disposable
 data/
 logs/
 
-# saved answer artefacts (Markdown, JSON, HTML) — local, disposable
+# saved answer artefacts (Markdown, JSON, HTML) - local, disposable
 artifacts/
 
 # python

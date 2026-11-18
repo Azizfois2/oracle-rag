@@ -13,6 +13,7 @@ full output in `logs/tests/<name>.log`, which is gitignored.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import subprocess
 import sys
 import time
@@ -28,6 +29,7 @@ class Suite:
     name: str
     script: str
     note: str
+    needs: str = ""
 
 
 SUITES = (
@@ -48,7 +50,7 @@ SUITES = (
     Suite("test_artifacts", "tests/test_artifacts.py",
           "answer artefacts written, read and escaped"),
     Suite("test_tui", "tests/test_tui.py",
-          "headless Textual panes, theme and artefacts"),
+          "headless Textual panes, theme and artefacts", needs="textual"),
 )
 
 
@@ -138,9 +140,15 @@ def main() -> int:
     print("No Gemini calls: --llm and the live answer check are excluded.\n")
 
     results: list[Result] = []
+    skipped: list[Suite] = []
     total_started = time.perf_counter()
     for index, suite in enumerate(suites, start=1):
         print(f"[{index}/{len(suites)}] {suite.name} ... ", end="", flush=True)
+        if suite.needs and importlib.util.find_spec(suite.needs) is None:
+            skipped.append(suite)
+            print(f"skip ({suite.needs} is not installed; "
+                  f"run: pip install -r requirements.txt)")
+            continue
         result = run_suite(suite, args.timeout)
         results.append(result)
         mark = "pass" if result.ok else "FAIL"
@@ -164,12 +172,14 @@ def main() -> int:
     passed = sum(1 for result in results if result.ok)
     failed = [result for result in results if not result.ok]
     print("\n" + "-" * 64)
-    print(f"  {passed}/{len(results)} suites passed in {elapsed:.1f}s")
+    skipped_note = f", {len(skipped)} skipped" if skipped else ""
+    print(f"  {passed}/{len(results)} suites passed in {elapsed:.1f}s"
+          f"{skipped_note}")
     print(f"  logs: {LOG_DIR}")
     if failed:
         print("  failed: " + ", ".join(result.suite.name for result in failed))
         return 1
-    if len(results) < len(suites):
+    if len(results) < len(suites) - len(skipped):
         print("  not all selected suites ran")
         return 1
     print("  no Gemini quota was spent")

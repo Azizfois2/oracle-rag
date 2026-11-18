@@ -73,12 +73,12 @@ CSS = """
   --ink:#201D1B; --ink2:#665E58; --ink3:#91867D;
   --line:#E6DFD9; --line-strong:#CFC3BA; --panel:#F1ECE7; --paper:#F8F5F2;
   --surface:#FFFEFC; --surface-2:#F4EFEB; --surface-3:#ECE4DE; --mark:#F4DCC4;
-  --accent:#B84632; --accent-hover:#983724; --accent-2:#D5835E;
-  --accent-soft:rgba(184,70,50,.09); --on-accent:#FFF9F6;
+  --accent:#B23A2B; --accent-hover:#9C3123; --accent-2:#D5835E;
+  --accent-soft:rgba(178,58,43,.09); --on-accent:#FFF9F6;
   --kw:#8A5A0B; --vec:#20609C; --hyb:#1E6E48; --rer:#6B4B8A;
   --warn:#9A6A00; --danger:#B84632; --ok:#247451;
   --ok-soft:rgba(36,116,81,.09); --ambient:rgba(213,131,94,.12);
-  --chat-user:#F1EAE4; --focus:rgba(184,70,50,.18);
+  --chat-user:#F1EAE4; --focus:rgba(178,58,43,.18);
   --shadow:rgba(45,34,28,.08); --shadow-lg:rgba(45,34,28,.14);
 }
 
