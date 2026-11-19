@@ -136,8 +136,8 @@ and never runs a second copy of the retrieval logic. `--local` spends no quota;
 `--no-history` leaves no rows behind; `--theme light` starts in the light
 palette.
 
-The web Ask page has the retrieval choice both in the sidebar and right above
-the chat input. Enter `/help`, `/search keyword`, `/mode local`, `/context off`,
+The web Ask page has the retrieval choice both in the sidebar and inside the
+chat-input bar, next to the send arrow. Enter `/help`, `/search keyword`, `/mode local`, `/context off`,
 `/find words`, `/sources`, or `/trace` in the Ask input to run the corresponding
 command. The existing sidebar controls and discussion manager remain available
 as clickable alternatives.
@@ -356,7 +356,7 @@ is no longer comparable: run Quality again.
 | **Ask** | ReAct agent over the corpus, with the answer streaming in and a trace: tool calls, queries, sources, API calls, latency. Every source is a numbered inline citation like [1]; click one to open the exact passage and its date. Follow-up context carries the last few turns. Local mode = no LLM, zero quota. A repeated question is served from cache with no call at all. Discussions are saved in Oracle, restored on open, searchable, renameable and downloadable. |
 | **Search lab** | The same query through keyword, vector, hybrid and the local reranker at once - scores, snippets, overlap. Filter every path to one source or one published-date range. The proof that each step earns its keep. |
 | **Corpus** | Source list with published dates, chunk counts, ingest text/files, delete a source, rebuild indexes. |
-| **Quality** | 40 labelled retrieval questions (single, cross-document, unanswerable) with hit@k and MRR per path, plus 28 labelled answer cases that check expected sources, expected facts, refusals and invented citations or citation numbers. Retrieval runs cost no quota; the live answer check is opt-in. |
+| **Quality** | 40 labelled retrieval questions (single, cross-document, unanswerable) with hit@k and MRR per path, plus 28 labelled answer cases that check expected sources, expected facts, refusals and invented citations or citation numbers. The summary marks which path Ask is currently using; all four stay visible for comparison. Retrieval runs cost no quota; the live answer check is opt-in. |
 | **Artefacts** | Answer and discussion files in `artifacts/`: preview Markdown, JSON and HTML, download or delete them. Saving costs no quota. |
 | **Health** | Database version, container state, indexes, embedding model, key presence, per-model quota with reset time, answer cache, discussion history, corpus backup. |
 

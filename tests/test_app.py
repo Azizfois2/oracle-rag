@@ -87,6 +87,8 @@ def main() -> int:
     check("slash autocomplete is injected into Ask",
           "slash-suggest-root" in html_body and "/search" in html_body
           and "/sources" in html_body)
+    check("search method is anchored into the chat-input bar",
+          "ask-method-anchor" in html_body)
     if at.chat_input:
         chat_before_help = list(at.session_state.get("chat") or [])
         at.chat_input[0].set_value("/help").run()
@@ -106,6 +108,17 @@ def main() -> int:
               at.session_state.get("follow_context") is False)
         at.chat_input[0].set_value("/search hybrid").run()
         at.chat_input[0].set_value("/context on").run()
+    ask_method = [s for s in at.selectbox if s.key == "ask_search_method_label"]
+    if ask_method:
+        ask_method[0].set_value("Vector").run()
+        check("chat-input selector switches retrieval",
+              at.session_state.get("search_method") == "vector",
+              str(at.session_state.get("search_method")))
+        check("chat-input selector syncs the sidebar",
+              str(at.session_state.get("sidebar_search_method_label")) == "Vector",
+              str(at.session_state.get("sidebar_search_method_label")))
+        ask_method = [s for s in at.selectbox if s.key == "ask_search_method_label"]
+        ask_method[0].set_value("Hybrid").run()
     dark = [t for t in at.toggle if t.key == "dark_mode"]
     if dark:
         dark[0].set_value(True).run()
@@ -253,6 +266,10 @@ def main() -> int:
                         and "set" not in f.columns), None)
         check("summary table rendered", summary is not None and len(summary) == 4,
               "none" if summary is None else str(len(summary)))
+        if summary is not None:
+            check("summary marks the method Ask is using",
+                  sum(1 for value in summary["path"] if "(Ask)" in str(value)) == 1,
+                  str(list(summary["path"])))
         breakdown = next((f for f in frames
                           if {"set", "path", "hit@k", "MRR"} <= set(f.columns)), None)
         check("type breakdown rendered", breakdown is not None and len(breakdown) == 8,
@@ -543,6 +560,7 @@ def main() -> int:
                     at.session_state["follow_context"] = True
                     at.session_state["search_method"] = "vector"
                     at.session_state["sidebar_search_method_label"] = "Vector"
+                    at.session_state["ask_search_method_label"] = "Vector"
                     at.chat_input[0].set_value("And who funded them?").run()
                     check("streaming UI renders without exception",
                           not at.exception, str(at.exception))

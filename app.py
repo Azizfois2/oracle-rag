@@ -278,6 +278,21 @@ section[data-testid="stSidebar"] .block-container{ padding-top:1.6rem; }
 .slash-suggest-item code{ font-family:"IBM Plex Mono",ui-monospace,monospace;
   color:var(--accent); font-weight:600; white-space:nowrap; }
 .slash-suggest-item span{ color:var(--ink3); font-size:.75rem; line-height:1.3; }
+
+/* Search method sits in the chat-input bar, just left of the send arrow. The
+   anchor div is rendered immediately before the selectbox, so the wrapper's
+   adjacent sibling is this one widget. */
+[data-testid="stElementContainer"]:has(#ask-method-anchor) + [data-testid="stElementContainer"]{
+  margin:0!important; padding:0!important; }
+[data-testid="stElementContainer"]:has(#ask-method-anchor) + [data-testid="stElementContainer"] [data-testid="stSelectbox"]{
+  margin:0!important; }
+[data-testid="stElementContainer"]:has(#ask-method-anchor) + [data-testid="stElementContainer"] [data-baseweb="select"]>div{
+  min-height:2rem!important; padding:.1rem .5rem!important; border-radius:8px!important;
+  font-size:.78rem!important; background:var(--surface-2)!important; box-shadow:none!important; }
+[data-testid="stElementContainer"]:has(#ask-method-anchor) + [data-testid="stElementContainer"] [data-baseweb="select"] span{
+  font-size:.78rem!important; }
+[data-testid="stElementContainer"]:has(#ask-method-anchor) + [data-testid="stElementContainer"] label{
+  display:none!important; }
 .stApp [data-testid="stExpander"] details{ border:1px solid var(--line); border-radius:12px;
   background:var(--surface); overflow:hidden; box-shadow:0 3px 12px var(--shadow); }
 .stApp [data-testid="stExpander"] summary{ padding:.15rem .2rem; }
@@ -878,11 +893,9 @@ def render_sidebar(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
                  "'who funded them?' still make sense. Off means every question stands alone.",
         )
         method_labels = list(SEARCH_METHOD_LABELS)
-        current_method = st.session_state.get("search_method", "hybrid")
-        st.session_state["sidebar_search_method_label"] = _method_label(current_method)
         selected_method = st.selectbox(
             "Ask search method", method_labels,
-            key="sidebar_search_method_label",
+            key="sidebar_search_method_label", on_change=_sidebar_method_changed,
             help="Choose Hybrid, Vector, Keyword, or Reranked corpus retrieval.",
         )
         st.session_state.search_method = SEARCH_METHOD_LABELS[selected_method]
@@ -1091,6 +1104,21 @@ def _method_label(method: str) -> str:
     return next((label for label, key in SEARCH_METHOD_LABELS.items()
                  if key == method), "Hybrid")
 
+
+def _sync_method(source: str, other: str) -> None:
+    """Keep both selectors and the shared method in step after a user change."""
+    label = str(st.session_state.get(source, "Hybrid"))
+    st.session_state.search_method = SEARCH_METHOD_LABELS.get(label, "hybrid")
+    st.session_state[other] = label
+
+
+def _sidebar_method_changed() -> None:
+    _sync_method("sidebar_search_method_label", "ask_search_method_label")
+
+
+def _ask_method_changed() -> None:
+    _sync_method("ask_search_method_label", "sidebar_search_method_label")
+
 GUI_SLASH_COMMANDS = (
     ("/help", "Show Ask commands"),
     ("/new", "Start a new discussion"),
@@ -1117,6 +1145,8 @@ _SLASH_JS = r"""
   if (window.__ragSlashReady) return;
   var commands = __COMMANDS__;
   var box = null;
+  var current = null;
+  var activeIndex = 0;
   var observer = null;
   var root = document.getElementById('slash-suggest-root');
   if (!root) return;
@@ -1134,6 +1164,36 @@ _SLASH_JS = r"""
   }
 
   function hide() { if (box) box.style.display = 'none'; }
+
+  function setActive(index) {
+    if (!box) return;
+    var rows = box.querySelectorAll('.slash-suggest-item');
+    if (!rows.length) return;
+    activeIndex = Math.max(0, Math.min(index, rows.length - 1));
+    for (var i = 0; i < rows.length; i++) {
+      rows[i].classList.toggle('active', i === activeIndex);
+    }
+    rows[activeIndex].scrollIntoView({ block: 'nearest' });
+  }
+
+  function accept(index, submit) {
+    if (!box || !current) return;
+    var row = box.querySelectorAll('.slash-suggest-item')[index];
+    if (!row) return;
+    var setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(current, row.querySelector('code').textContent + ' ');
+    current.focus();
+    current.dispatchEvent(new Event('input', { bubbles: true }));
+    hide();
+    if (submit) {
+      setTimeout(function() {
+        current.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true
+        }));
+      }, 60);
+    }
+  }
 
   function render(ta) {
     var value = ta.value || '';
@@ -1154,15 +1214,15 @@ _SLASH_JS = r"""
       desc.textContent = entry[1];
       row.appendChild(name);
       row.appendChild(desc);
+      row.addEventListener('mouseenter', function() { setActive(index); });
       row.addEventListener('mousedown', function(event) {
         event.preventDefault();
-        ta.value = entry[0] + ' ';
-        ta.focus();
-        ta.dispatchEvent(new Event('input', { bubbles: true }));
-        hide();
+        accept(index, true);
       });
       b.appendChild(row);
     });
+    current = ta;
+    activeIndex = 0;
     b.style.display = 'block';
   }
 
@@ -1174,19 +1234,48 @@ _SLASH_JS = r"""
     ta.addEventListener('blur', function() { setTimeout(hide, 180); });
     ta.addEventListener('keydown', function(event) {
       if (!box || box.style.display === 'none') return;
-      if (event.key === 'Escape') { hide(); }
-      if (event.key === 'Tab') {
-        var first = box.querySelector('.slash-suggest-item');
-        if (first) { event.preventDefault(); first.dispatchEvent(new MouseEvent('mousedown')); }
+      var rows = box.querySelectorAll('.slash-suggest-item');
+      if (!rows.length) return;
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setActive(activeIndex + 1);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setActive(activeIndex - 1);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        hide();
+      } else if (event.key === 'Tab' || event.key === 'Enter') {
+        event.preventDefault();
+        accept(activeIndex, event.key === 'Enter');
       }
     });
+  }
+
+  function positionMethod() {
+    var anchor = document.getElementById('ask-method-anchor');
+    var submit = document.querySelector('[data-testid="stChatInputSubmitButton"]');
+    if (!anchor || !submit) return;
+    var wrapper = anchor.closest('[data-testid="stElementContainer"]');
+    var target = wrapper && wrapper.nextElementSibling;
+    if (!target) return;
+    var bar = submit.getBoundingClientRect();
+    var width = 132;
+    var height = target.offsetHeight || 34;
+    target.style.position = 'fixed';
+    target.style.zIndex = '9998';
+    target.style.width = width + 'px';
+    target.style.right = (window.innerWidth - bar.left + 12) + 'px';
+    target.style.bottom = (window.innerHeight - bar.top - bar.height / 2 - height / 2) + 'px';
   }
 
   function scan() {
     var inputs = document.querySelectorAll('[data-testid="stChatInputTextArea"]');
     for (var i = 0; i < inputs.length; i++) attach(inputs[i]);
+    positionMethod();
   }
   scan();
+  window.addEventListener('resize', positionMethod);
   window.__ragSlashReady = true;
   observer = new MutationObserver(scan);
   observer.observe(document.body, { childList: true, subtree: true });
@@ -1633,9 +1722,6 @@ def tab_ask(settings: rc.Settings, agent: rc.Agent, history: rc.ChatHistory,
     saved = st.session_state.pop("artifact_flash", None)
     if saved:
         st.success(saved)
-    command_result = st.session_state.pop("command_result", None)
-    if command_result:
-        st.markdown(command_result)
 
     chat = st.session_state.chat
     if not chat and not st.session_state.get("pending"):
@@ -1691,19 +1777,24 @@ def tab_ask(settings: rc.Settings, agent: rc.Agent, history: rc.ChatHistory,
     if queued:
         answer_flow(queued, settings, agent, history)
 
-    # Retrieval choice lives next to the Ask box as well as in the sidebar.
-    method_col, hint_col = st.columns([1, 3], gap="small")
-    with method_col:
-        current_method = st.session_state.get("search_method", "hybrid")
-        st.session_state["ask_search_method_label"] = _method_label(current_method)
-        chosen_label = st.selectbox(
-            "Search method", list(SEARCH_METHOD_LABELS),
-            key="ask_search_method_label", label_visibility="collapsed",
-            help="Choose Hybrid, Vector, Keyword, or Reranked corpus retrieval.",
-        )
-        st.session_state.search_method = SEARCH_METHOD_LABELS[chosen_label]
-    with hint_col:
-        st.caption("Type `/` for commands, or ask about the corpus.")
+    # Retrieval choice also lives inside the chat-input bar, by the send arrow.
+    # CSS anchors this keyed container over the chat input; it stays a real
+    # Streamlit widget, so selection and callbacks work normally.
+    st.html('<div id="ask-method-anchor"></div>')
+    chosen_label = st.selectbox(
+        "Search method", list(SEARCH_METHOD_LABELS),
+        key="ask_search_method_label", label_visibility="collapsed",
+        on_change=_ask_method_changed,
+        help="Choose Hybrid, Vector, Keyword, or Reranked corpus retrieval.",
+    )
+    st.session_state.search_method = SEARCH_METHOD_LABELS[chosen_label]
+    st.caption("Type `/` for commands, or ask about the corpus.")
+
+    # Show command feedback where the user is looking, next to the chat input.
+    command_result = st.session_state.get("command_result")
+    if command_result:
+        with st.chat_message("assistant"):
+            st.markdown(command_result)
 
     render_slash_autocomplete()
     prompt = st.chat_input("Ask about the corpus")
@@ -1714,6 +1805,7 @@ def tab_ask(settings: rc.Settings, agent: rc.Agent, history: rc.ChatHistory,
             st.session_state.pending_slash = prompt.strip()
             st.rerun()
         else:
+            st.session_state.pop("command_result", None)
             answer_flow(prompt, settings, agent, history)
 
     confirm_delete = (st.session_state.get("slash_delete_confirm")
@@ -2054,8 +2146,16 @@ def tab_quality(engine: rc.RagEngine, agent: rc.Agent) -> None:
         "MRR": st.column_config.ProgressColumn(
             "MRR", min_value=0.0, max_value=1.0, format="%.2f"),
     }
+    ask_method = st.session_state.get("search_method", "hybrid")
+    st.markdown(
+        f'<p class="small">Ask is currently retrieving with '
+        f'<b>{esc(_method_label(ask_method))}</b>. Its row is marked '
+        '<b>(Ask)</b> below; the other paths stay for comparison.</p>',
+        unsafe_allow_html=True,
+    )
     summary = pd.DataFrame([
-        {"path": LABEL[m], "hit@k": result["summary"][m]["hit"],
+        {"path": LABEL[m] + (" (Ask)" if m == ask_method else ""),
+         "hit@k": result["summary"][m]["hit"],
          "MRR": result["summary"][m]["mrr"],
          "found": f"{result['summary'][m]['found']}/{result['summary'][m]['n']}"}
         for m in METHODS
