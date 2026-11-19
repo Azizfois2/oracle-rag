@@ -50,9 +50,10 @@ except ImportError as exc:  # pragma: no cover - shown as a readable error
 
 
 COMMANDS = (
-    "/help", "/local", "/remote", "/new", "/history", "/open", "/find",
-    "/sources", "/trace", "/save", "/artefacts", "/preview", "/title",
-    "/delete", "/theme", "/quit",
+    "/help", "/local", "/remote", "/mode", "/search", "/context",
+    "/new", "/history", "/open", "/find", "/clear", "/sources",
+    "/trace", "/save", "/artefacts", "/preview", "/title", "/delete",
+    "/theme", "/quit",
 )
 
 
@@ -128,6 +129,8 @@ class OracleTui(App[None]):
         self.local = bool(local)
         self.k = max(1, int(k))
         self.weight = float(weight)
+        self.search_method = "hybrid"
+        self.follow_context = True
         self.use_cache = bool(use_cache)
         self.dark = bool(dark)
         self.chat_id: str | None = None
@@ -146,6 +149,7 @@ class OracleTui(App[None]):
             with Vertical(id="left"):
                 with Horizontal(id="toolbar"):
                     yield Static("ready", id="status")
+                    yield Button("Search: Hybrid", id="search")
                     yield Button("Theme", id="theme")
                     yield Button("Save artefact", id="save")
                 yield RichLog(id="transcript", wrap=True, markup=False,
@@ -228,7 +232,8 @@ class OracleTui(App[None]):
             elif role == "assistant":
                 answer = turn.get("answer")
                 if answer is not None:
-                    self._log_answer(answer, show_sources=False)
+                    self._log_answer(rc.enforce_answer_grounding(answer),
+                                     show_sources=False)
 
     @staticmethod
     def _last_answer(turns: list[dict[str, Any]]) -> rc.Answer | None:
@@ -295,6 +300,7 @@ class OracleTui(App[None]):
         if answer is None:
             log.write(Text("No answer yet.", style="dim"))
             return
+        answer = rc.enforce_answer_grounding(answer)
         if answer.local:
             if not answer.hits:
                 log.write(Text("No hits.", style="dim"))
@@ -339,6 +345,14 @@ class OracleTui(App[None]):
             self.action_toggle_theme()
         elif event.button.id == "save":
             self.action_save_artefact()
+        elif event.button.id == "search":
+            methods = list(rc.SEARCH_METHODS)
+            self.search_method = methods[(methods.index(self.search_method) + 1)
+                                         % len(methods)]
+            labels = {"hybrid": "Hybrid", "vector": "Vector",
+                      "keyword": "Keyword", "rerank": "Reranked"}
+            self.query_one("#search", Button).label = f"Search: {labels[self.search_method]}"
+            self._set_status(f"Ask retrieval set to {labels[self.search_method]}")
 
     def action_focus_prompt(self) -> None:
         self.query_one("#prompt", Input).focus()
@@ -381,6 +395,15 @@ class OracleTui(App[None]):
             self.local = False
             self._set_status("remote mode: Gemini answers")
             self._say(Text("Remote mode on: the Gemini agent will answer.", style="dim"))
+        elif name == "/mode":
+            if arg.lower() in ("local", "remote"):
+                self._command("/" + arg.lower())
+            else:
+                self._say(Text("usage: /mode local|remote", style="yellow"))
+        elif name == "/search":
+            self._search_method(arg)
+        elif name == "/context":
+            self._context_mode(arg)
         elif name == "/new":
             self._new()
         elif name == "/history":
@@ -390,6 +413,9 @@ class OracleTui(App[None]):
             self._open(arg)
         elif name == "/find":
             self._find(arg)
+        elif name == "/clear":
+            self._clear("transcript")
+            self._welcome()
         elif name == "/sources":
             self._refresh_sources()
             self.query_one(TabbedContent).active = "sources-tab"
@@ -416,10 +442,14 @@ class OracleTui(App[None]):
             ("/help", "this list"),
             ("/local", "retrieval only, no model, zero quota"),
             ("/remote", "use the Gemini agent again"),
+            ("/mode local|remote", "set the answer mode"),
+            ("/search hybrid|vector|keyword|rerank", "choose corpus retrieval"),
+            ("/context on|off", "toggle follow-up context"),
             ("/new", "start a fresh discussion"),
             ("/history", "the twelve most recent discussions"),
             ("/open N", "reopen discussion N from that list"),
             ("/find words", "search saved questions and answers"),
+            ("/clear", "clear the transcript display"),
             ("/sources", "sources of the last answer"),
             ("/trace", "trace of the last answer"),
             ("/save", "save the last answer as Markdown, JSON and HTML"),
@@ -433,6 +463,28 @@ class OracleTui(App[None]):
         self._say(Text("Commands", style="bold"))
         for name, description in rows:
             self._say(Text.assemble((f"  {name:<14}", "cyan"), (description, "")))
+
+    def _search_method(self, arg: str) -> None:
+        if not arg:
+            self._say(Text(f"Current retrieval: {self.search_method}"))
+            return
+        try:
+            self.search_method = rc.normalise_search_method(arg)
+        except rc.RagError as exc:
+            self._say(Text(str(exc), style="yellow"))
+            return
+        labels = {"hybrid": "Hybrid", "vector": "Vector",
+                  "keyword": "Keyword", "rerank": "Reranked"}
+        self.query_one("#search", Button).label = f"Search: {labels[self.search_method]}"
+        self._set_status(f"Ask retrieval set to {labels[self.search_method]}")
+
+    def _context_mode(self, arg: str) -> None:
+        value = arg.lower()
+        if value not in ("on", "off"):
+            self._say(Text("usage: /context on|off", style="yellow"))
+            return
+        self.follow_context = value == "on"
+        self._set_status(f"follow-up context {value}")
 
     def _new(self) -> None:
         self.chat_id = uuid.uuid4().hex
@@ -511,7 +563,8 @@ class OracleTui(App[None]):
         self._set_status(f"opened {item['title']}")
 
     def _trace(self) -> None:
-        answer = self.last_answer
+        answer = (rc.enforce_answer_grounding(self.last_answer)
+                  if self.last_answer is not None else None)
         if answer is None:
             self._say(Text("No answer yet.", style="dim"))
             return
@@ -605,7 +658,7 @@ class OracleTui(App[None]):
             return
         self._busy = True
         self.last_question = question
-        context = self._chat_context()
+        context = self._chat_context() if self.follow_context else []
         self.turns.append({"role": "user", "content": question})
         self._log_user(question)
         self._save("user", question)
@@ -627,13 +680,16 @@ class OracleTui(App[None]):
 
         try:
             if self.local:
-                answer = self.agent.ask_local(
-                    question, k=self.k, weight=self.weight, context=context)
+                options = dict(k=self.k, weight=self.weight, context=context)
+                if self.search_method != "hybrid":
+                    options["search_method"] = self.search_method
+                answer = self.agent.ask_local(question, **options)
             else:
-                answer = self.agent.ask(
-                    question, use_cache=self.use_cache, context=context,
-                    on_step=on_step, on_token=on_token,
-                )
+                options = dict(use_cache=self.use_cache, context=context,
+                               on_step=on_step, on_token=on_token)
+                if self.search_method != "hybrid":
+                    options["search_method"] = self.search_method
+                answer = self.agent.ask(question, **options)
         except (rc.NoModel, rc.QuotaExhausted) as exc:
             self.call_from_thread(self._failed, str(exc),
                                   "try /local, or add a key to .env")

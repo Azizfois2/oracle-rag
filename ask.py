@@ -50,8 +50,9 @@ for stream in (sys.stdout, sys.stderr):
 
 
 COMMANDS = (
-    "/help", "/local", "/remote", "/new", "/history", "/open", "/find",
-    "/sources", "/trace", "/title", "/delete", "/quit",
+    "/help", "/local", "/remote", "/mode", "/search", "/context",
+    "/new", "/history", "/open", "/find", "/clear", "/sources",
+    "/trace", "/title", "/delete", "/quit",
 )
 
 
@@ -131,6 +132,7 @@ class ChatSession:
         console: Any = None,
         tty: bool | None = None,
         reader: Callable[[str], str | None] | None = None,
+        search_method: str = "hybrid",
     ) -> None:
         if Console is None:
             raise rc.RagError("terminal chat needs the rich package: pip install rich")
@@ -139,6 +141,8 @@ class ChatSession:
         self.local = local
         self.k = max(1, int(k))
         self.weight = float(weight)
+        self.search_method = rc.normalise_search_method(search_method)
+        self.follow_context = True
         self.show_steps = show_steps
         self.use_cache = use_cache
         self.console = console or Console()
@@ -264,6 +268,15 @@ class ChatSession:
         elif name == "/remote":
             self.local = False
             self.console.print("[dim]Remote mode on: the Gemini agent will answer.[/dim]")
+        elif name == "/mode":
+            if arg.lower() not in ("local", "remote"):
+                self.console.print("[yellow]usage: /mode local|remote[/yellow]")
+            else:
+                self._command("/" + arg.lower())
+        elif name == "/search":
+            self._search_method(arg)
+        elif name == "/context":
+            self._context_mode(arg)
         elif name == "/new":
             self._new()
         elif name == "/history":
@@ -272,6 +285,10 @@ class ChatSession:
             self._open(arg)
         elif name == "/find":
             self._find(arg)
+        elif name == "/clear":
+            self.console.print("[dim]Terminal view cleared.[/dim]")
+            if hasattr(self.console, "clear"):
+                self.console.clear()
         elif name == "/sources":
             self._show_sources()
         elif name == "/trace":
@@ -289,10 +306,14 @@ class ChatSession:
             ("/help", "this list"),
             ("/local", "retrieval only, no model, zero quota"),
             ("/remote", "use the Gemini agent again"),
+            ("/mode local|remote", "set the answer mode"),
+            ("/search hybrid|vector|keyword|rerank", "choose corpus retrieval"),
+            ("/context on|off", "toggle follow-up context"),
             ("/new", "start a fresh discussion"),
             ("/history", "the ten most recent discussions"),
             ("/open N", "reopen discussion N from that list"),
             ("/find words", "search saved questions and answers"),
+            ("/clear", "clear the terminal display"),
             ("/sources", "sources of the last answer"),
             ("/trace", "trace of the last answer"),
             ("/title [name]", "show or rename this discussion"),
@@ -301,6 +322,25 @@ class ChatSession:
         )
         for name, description in rows:
             self.console.print(f"  [cyan]{name:<14}[/cyan] {description}")
+
+    def _search_method(self, arg: str) -> None:
+        if not arg:
+            self.console.print(f"Current retrieval: {self.search_method}")
+            return
+        try:
+            self.search_method = rc.normalise_search_method(arg)
+        except rc.RagError as exc:
+            self.console.print(f"[yellow]{exc}[/yellow]")
+            return
+        self.console.print(f"[dim]Ask retrieval set to {self.search_method}.[/dim]")
+
+    def _context_mode(self, arg: str) -> None:
+        value = arg.lower()
+        if value not in ("on", "off"):
+            self.console.print("[yellow]usage: /context on|off[/yellow]")
+            return
+        self.follow_context = value == "on"
+        self.console.print(f"[dim]Follow-up context {value}.[/dim]")
 
     def _new(self) -> None:
         self.chat_id = uuid.uuid4().hex
@@ -365,6 +405,8 @@ class ChatSession:
                 answer = turn.get("answer")
                 body = str(getattr(answer, "text", "") or "").strip()
                 if body:
+                    answer = rc.enforce_answer_grounding(answer)
+                    body = answer.text.strip()
                     if len(body) > 600:
                         body = body[:600].rsplit(" ", 1)[0] + "..."
                     self.console.print(body)
@@ -399,7 +441,8 @@ class ChatSession:
         self.console.print("[dim]/open N reopens one.[/dim]")
 
     def _show_sources(self) -> None:
-        answer = self.last_answer
+        answer = (rc.enforce_answer_grounding(self.last_answer)
+                  if self.last_answer is not None else None)
         if answer is None:
             self.console.print("[dim]No answer yet.[/dim]")
             return
@@ -419,7 +462,8 @@ class ChatSession:
             self.console.print(f"  {source_label(item)}  [dim]{score:.3f}[/dim]")
 
     def _show_trace(self) -> None:
-        answer = self.last_answer
+        answer = (rc.enforce_answer_grounding(self.last_answer)
+                  if self.last_answer is not None else None)
         if answer is None:
             self.console.print("[dim]No answer yet.[/dim]")
             return
@@ -482,14 +526,15 @@ class ChatSession:
         return out
 
     def _answer(self, question: str) -> None:
-        context = self._context()
+        context = self._context() if self.follow_context else []
         self.turns.append({"role": "user", "content": question})
         self._save("user", question)
         try:
             if self.local:
-                answer = self.agent.ask_local(
-                    question, k=self.k, weight=self.weight, context=context
-                )
+                options = dict(k=self.k, weight=self.weight, context=context)
+                if self.search_method != "hybrid":
+                    options["search_method"] = self.search_method
+                answer = self.agent.ask_local(question, **options)
             else:
                 answer = self._ask_remote(question, context)
         except (rc.NoModel, rc.QuotaExhausted) as exc:
@@ -520,7 +565,9 @@ class ChatSession:
     def _ask_remote(self, question: str, context: list[dict[str, Any]]) -> rc.Answer:
         if not self.tty:
             return self.agent.ask(
-                question, use_cache=self.use_cache, context=context
+                question, use_cache=self.use_cache, context=context,
+                **({"search_method": self.search_method}
+                   if self.search_method != "hybrid" else {}),
             )
 
         chunks: list[str] = []
@@ -557,6 +604,8 @@ class ChatSession:
                 on_token=on_token,
                 on_reset=on_reset,
                 on_step=on_step,
+                **({"search_method": self.search_method}
+                   if self.search_method != "hybrid" else {}),
             )
         return answer
 

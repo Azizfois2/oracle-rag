@@ -864,6 +864,19 @@ def render_sidebar(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
             help="Send the last few turns with the question, so follow-ups like "
                  "'who funded them?' still make sense. Off means every question stands alone.",
         )
+        method_labels = list(SEARCH_METHOD_LABELS)
+        current_method = st.session_state.get("search_method", "hybrid")
+        method_index = next(
+            (index for index, method in enumerate(SEARCH_METHOD_LABELS.values())
+             if method == current_method), 0)
+        selected_method = st.selectbox(
+            "Ask search method", method_labels, index=method_index,
+            key="sidebar_search_method_label",
+            help="Choose Hybrid, Vector, Keyword, or Reranked corpus retrieval.",
+        )
+        st.session_state.search_method = SEARCH_METHOD_LABELS[selected_method]
+        st.caption("Ask commands: `/search`, `/mode`, `/context`, `/history`, "
+                   "`/open`, `/find`, `/sources`, `/trace`, `/save`, `/title`, `/delete`.")
         if not settings.has_llm:
             st.markdown('<p class="small">No Gemini key found, so only local mode is available. '
                         'Add <span class="mono">GEMINI_API_KEY</span> to '
@@ -1054,6 +1067,158 @@ SUGGESTIONS = (
     "Which open-weight models landed within 48 hours of each other?",
 )
 
+SEARCH_METHOD_LABELS = {
+    "Hybrid": "hybrid",
+    "Vector": "vector",
+    "Keyword": "keyword",
+    "Reranked": "rerank",
+}
+
+GUI_SLASH_COMMANDS = (
+    ("/help", "Show Ask commands"),
+    ("/new", "Start a new discussion"),
+    ("/local", "Switch to zero-quota retrieval"),
+    ("/remote", "Switch to grounded model answers"),
+    ("/search hybrid|vector|keyword|rerank", "Choose the retrieval method"),
+    ("/mode local|remote", "Set the answer mode"),
+    ("/context on|off", "Toggle follow-up context"),
+    ("/history", "Show recent saved discussions in the sidebar"),
+    ("/open N", "Open a recent saved discussion"),
+    ("/find words", "Search saved discussions"),
+    ("/sources", "Show sources for the latest answer"),
+    ("/trace", "Show the latest answer trace"),
+    ("/save", "Save the latest answer as an artefact"),
+    ("/title [name]", "Show or rename this discussion"),
+    ("/delete", "Open the discussion delete confirmation"),
+    ("/clear", "Clear the discussion search"),
+)
+
+
+def _last_saved_answer() -> rc.Answer | None:
+    for item in reversed(st.session_state.get("chat") or []):
+        if item.get("role") == "assistant" and item.get("answer"):
+            return item["answer"]
+    return None
+
+
+def handle_gui_slash(line: str, settings: rc.Settings,
+                     history: rc.ChatHistory) -> str:
+    """Execute an Ask slash command before sidebar widgets are created."""
+    name, _, raw_arg = line.strip().partition(" ")
+    name, arg = name.lower(), raw_arg.strip()
+    if name == "/help":
+        return "**Ask commands**\n\n" + "\n".join(
+            f"- `{command}`: {description}"
+            for command, description in GUI_SLASH_COMMANDS)
+    if name in ("/new", "/clear-chat"):
+        fresh_chat()
+        return "Started a new discussion."
+    if name == "/local":
+        st.session_state.local_mode = True
+        return "Local mode on. Retrieval only, no model call or quota."
+    if name == "/remote":
+        if not settings.has_llm:
+            return "Remote mode is unavailable. Add GEMINI_API_KEY to the environment."
+        st.session_state.local_mode = False
+        return "Remote mode on. Answers must be supported by cited corpus documents."
+    if name == "/mode":
+        if arg.lower() in ("local", "remote"):
+            return handle_gui_slash("/" + arg.lower(), settings, history)
+        return "Usage: `/mode local` or `/mode remote`."
+    if name == "/search":
+        method = arg.lower().replace("-", "")
+        if method == "reranked":
+            method = "rerank"
+        try:
+            method = rc.normalise_search_method(method)
+        except rc.RagError:
+            return "Usage: `/search hybrid`, `/search vector`, `/search keyword`, or `/search rerank`."
+        st.session_state.search_method = method
+        label = next(label for label, key in SEARCH_METHOD_LABELS.items()
+                     if key == method)
+        st.session_state.sidebar_search_method_label = label
+        return f"Ask retrieval set to **{label}**."
+    if name == "/context":
+        value = arg.lower()
+        if value in ("on", "off"):
+            st.session_state.follow_context = value == "on"
+            return f"Follow-up context {'on' if value == 'on' else 'off'}."
+        return "Usage: `/context on` or `/context off`."
+    if name == "/history":
+        st.session_state.history_search = ""
+        st.session_state.history_limit = 6
+        return "Showing recent saved discussions in the sidebar."
+    if name == "/open":
+        try:
+            index = int(arg)
+        except ValueError:
+            return "Usage: `/open N`. Use `/history` to see recent discussions."
+        try:
+            chats = history.list(limit=10)
+        except rc.RagError as exc:
+            return f"Could not list discussions: {exc}"
+        if not 1 <= index <= len(chats):
+            return "No discussion at that number. Use `/history` to see the list."
+        open_chat(history, chats[index - 1]["id"])
+        st.session_state.history_search = ""
+        return f"Opened **{esc(chats[index - 1]['title'])}**."
+    if name == "/find":
+        if not arg:
+            return "Usage: `/find words from a saved discussion`."
+        st.session_state.history_search = arg
+        st.session_state.history_limit = 6
+        return f"Searching saved discussions for **{esc(arg)}** in the sidebar."
+    if name == "/clear":
+        st.session_state.history_search = ""
+        st.session_state.history_limit = 4
+        return "Discussion search cleared."
+    if name == "/sources":
+        answer = _last_saved_answer()
+        if answer is None or not answer.sources:
+            return "The latest answer has no saved sources."
+        return "**Latest answer sources**\n\n" + "\n".join(
+            f"- {esc(str(item.get('source', 'unknown')))}"
+            for item in answer.sources)
+    if name == "/trace":
+        answer = _last_saved_answer()
+        if answer is None or not answer.steps:
+            return "There is no answer trace yet."
+        return "**Latest answer trace**\n\n" + "\n".join(
+            f"- `{step.kind}` {esc(step.label)}"
+            + (f": {esc(step.detail)}" if step.detail else "")
+            for step in answer.steps)
+    if name == "/save":
+        chat = st.session_state.get("chat") or []
+        for index in range(len(chat) - 1, -1, -1):
+            item = chat[index]
+            if item.get("role") == "assistant" and item.get("answer") is not None:
+                save_answer_artefact(chat, index,
+                                     rc.enforce_answer_grounding(item["answer"]))
+                return "Saving the latest answer as an artefact."
+        return "There is no answer to save yet."
+    if name == "/title":
+        chat_id = st.session_state.get("chat_id")
+        if not chat_id:
+            return "There is no active discussion to rename."
+        if not arg:
+            try:
+                return f"Discussion title: **{esc(history.title(chat_id))}**"
+            except rc.RagError as exc:
+                return str(exc)
+        try:
+            history.rename(chat_id, arg)
+        except rc.RagError as exc:
+            return f"Could not rename discussion: {exc}"
+        st.session_state.history_flash = "Discussion renamed."
+        return f"Discussion renamed to **{esc(arg)}**."
+    if name == "/delete":
+        chat_id = st.session_state.get("chat_id")
+        if not chat_id:
+            return "There is no active discussion to delete."
+        st.session_state.slash_delete_confirm = chat_id
+        return "Review the delete confirmation below the Ask input."
+    return f"Unknown command `{esc(name)}`. Type `/help` for the list."
+
 
 _CITE_MARK = re.compile(r"\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\]")
 _SOURCE_MARK = re.compile(
@@ -1150,8 +1315,9 @@ def render_answer_body(answer: rc.Answer, show_text: bool = True,
         if not answer.hits:
             st.markdown('<p class="small">Nothing matched. Try different words.</p>',
                         unsafe_allow_html=True)
+        method = answer.hits[0].method if answer.hits else "hybrid"
         for index, hit in enumerate(answer.hits, start=1):
-            st.markdown(row_html(index, hit, "hybrid"), unsafe_allow_html=True)
+            st.markdown(row_html(index, hit, method), unsafe_allow_html=True)
     else:
         if show_text:
             render_answer_text(answer, engine=engine)
@@ -1235,6 +1401,7 @@ def answer_flow(question: str, settings: rc.Settings, agent: rc.Agent,
 def _run_answer(question: str, settings: rc.Settings, agent: rc.Agent,
                 history: rc.ChatHistory, context: list[dict]) -> None:
     local = st.session_state.local_mode or not settings.has_llm
+    search_method = st.session_state.get("search_method", "hybrid")
     with st.chat_message("assistant"):
         status = st.status(
             "Reading the corpus" if local else "Searching the corpus",
@@ -1266,11 +1433,18 @@ def _run_answer(question: str, settings: rc.Settings, agent: rc.Agent,
 
         try:
             if local:
-                answer = agent.ask_local(question, context=context)
+                if search_method == "hybrid":
+                    answer = agent.ask_local(question, context=context)
+                else:
+                    answer = agent.ask_local(question, context=context,
+                                             search_method=search_method)
             else:
-                answer = agent.ask(question, on_step=on_step,
-                                   on_token=on_token, on_reset=on_reset,
-                                   context=context)
+                ask_options = dict(on_step=on_step, on_token=on_token,
+                                   on_reset=on_reset, context=context)
+                if search_method != "hybrid":
+                    ask_options["search_method"] = search_method
+                answer = agent.ask(question, **ask_options)
+            answer = rc.enforce_answer_grounding(answer)
             status.update(label=f"Answered in {answer.elapsed:.1f}s",
                           state="complete", expanded=False)
         except rc.QuotaExhausted as exc:
@@ -1327,6 +1501,9 @@ def tab_ask(settings: rc.Settings, agent: rc.Agent, history: rc.ChatHistory,
     saved = st.session_state.pop("artifact_flash", None)
     if saved:
         st.success(saved)
+    command_result = st.session_state.pop("command_result", None)
+    if command_result:
+        st.markdown(command_result)
 
     chat = st.session_state.chat
     if not chat and not st.session_state.get("pending"):
@@ -1366,7 +1543,7 @@ def tab_ask(settings: rc.Settings, agent: rc.Agent, history: rc.ChatHistory,
                         st.rerun()
         else:
             with st.chat_message("assistant"):
-                answer = item["answer"]
+                answer = rc.enforce_answer_grounding(item["answer"])
                 render_answer_body(answer, engine=agent.engine)
                 if st.button(
                     "Save artefact",
@@ -1384,7 +1561,40 @@ def tab_ask(settings: rc.Settings, agent: rc.Agent, history: rc.ChatHistory,
 
     prompt = st.chat_input("Ask about the corpus")
     if prompt:
-        answer_flow(prompt, settings, agent, history)
+        if prompt.lstrip().startswith("/"):
+            st.session_state.pending_slash = prompt.strip()
+            st.rerun()
+        else:
+            answer_flow(prompt, settings, agent, history)
+
+    confirm_delete = (st.session_state.get("slash_delete_confirm")
+                      or st.session_state.get("confirm_delete"))
+    if confirm_delete == st.session_state.get("chat_id"):
+        st.warning("Delete this discussion and all its messages?")
+        confirm_col, cancel_col = st.columns(2)
+        if confirm_col.button("Confirm delete", key="ask_confirm_delete",
+                              type="primary"):
+            try:
+                removed = history.delete(confirm_delete)
+            except rc.RagError as exc:
+                st.error(f"Could not delete discussion: {exc}")
+            else:
+                st.session_state.history_flash = f"Deleted {removed} messages."
+                try:
+                    remaining = history.list(limit=1)
+                except rc.RagError:
+                    remaining = []
+                if remaining:
+                    open_chat(history, remaining[0]["id"])
+                else:
+                    fresh_chat()
+                st.session_state.pop("confirm_delete", None)
+                st.session_state.pop("slash_delete_confirm", None)
+                st.rerun()
+        if cancel_col.button("Cancel", key="ask_cancel_delete"):
+            st.session_state.pop("confirm_delete", None)
+            st.session_state.pop("slash_delete_confirm", None)
+            st.rerun()
 
 
 # --------------------------------------------------------------------------- #
@@ -2386,6 +2596,7 @@ def main() -> None:
     settings, engine, agent, history = boot()
     st.session_state.setdefault("local_mode", not settings.has_llm)
     st.session_state.setdefault("follow_context", True)
+    st.session_state.setdefault("search_method", "hybrid")
     st.session_state.setdefault("history_limit", 4)
     st.session_state.setdefault("bundle", None)
 
@@ -2395,6 +2606,10 @@ def main() -> None:
         st.stop()
 
     init_chat(history)
+    pending_slash = st.session_state.pop("pending_slash", None)
+    if pending_slash:
+        st.session_state.command_result = handle_gui_slash(
+            pending_slash, settings, history)
     stats = engine.stats()
     render_sidebar(settings, engine, agent, history, stats, db)
 

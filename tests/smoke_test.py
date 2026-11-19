@@ -88,6 +88,16 @@ def main() -> int:
           first.get("passages") == {"1": "body text", "2": "more"},
           str(first.get("passages")))
     check("prompt asks for numbered citations", "[1]" in rc.PROMPT)
+    check("prompt requires document-only answers",
+          "only from the documents" in rc.PROMPT
+          and "Do not fill gaps from memory" in rc.PROMPT)
+    citation_sources = [{"source": "morocco.md", "citation": 1}]
+    check("grounding accepts a citation to a returned source",
+          rc._has_valid_citations("Rabat is the capital [1].", citation_sources))
+    check("grounding rejects answers without citations",
+          not rc._has_valid_citations("Rabat is the capital.", citation_sources))
+    check("grounding rejects citations to missing sources",
+          not rc._has_valid_citations("Rabat is the capital [2].", citation_sources))
     check("a read timeout is transient",
           rc._is_transient_error(TimeoutError("The read operation timed out")))
     check("a 503 is transient",
@@ -409,17 +419,17 @@ def main() -> int:
         check("corpus fingerprint computed", bool(fingerprint), str(fingerprint))
 
         answer = rc.Answer(
-            text="Cached facts.",
+            text="Cached facts [1].",
             model="test-model",
             steps=[rc.Step("search", "vector", "1 hit")],
-            sources=[{"source": SCRATCH, "relevance": 0.9}],
+            sources=[{"source": SCRATCH, "relevance": 0.9, "citation": 1}],
             calls=3,
             elapsed=2.5,
         )
         key = cache.key("What is cached?", fingerprint)
         cache.put(key, answer, "What is cached?", fingerprint)
         got = cache.get(key)
-        check("cache returns the answer", bool(got) and got.text == "Cached facts.")
+        check("cache returns the answer", bool(got) and got.text == "Cached facts [1].")
         check("cache marks it as cached", bool(got) and got.cached)
         check("cache keeps steps and sources",
               bool(got) and got.steps[0].label == "vector"
@@ -436,7 +446,9 @@ def main() -> int:
         # a hit must be served without touching a model
         cached_agent = rc.Agent(engine, settings, cache=cache)
         hit_key = cache.key("Cached question", engine.corpus_fingerprint() or "")
-        cache.put(hit_key, rc.Answer(text="from cache", model="cached-model", calls=2, elapsed=1.0),
+        cache.put(hit_key, rc.Answer(
+                      text="from cache [1]", model="cached-model", calls=2,
+                      elapsed=1.0, sources=[{"source": "cache.md", "citation": 1}]),
                   "Cached question", engine.corpus_fingerprint() or "")
 
         def fail(model: str) -> None:
@@ -445,8 +457,59 @@ def main() -> int:
         cached_agent._graph = fail                     # type: ignore[assignment]
         served = cached_agent.ask("Cached question")
         check("agent serves a hit without a model call",
-              served.text == "from cache" and served.cached, served.text)
+              served.text == "from cache [1]" and served.cached, served.text)
         check("cached answer reports zero elapsed", served.elapsed == 0.0)
+        cache.put(cache.key("Legacy answer", fingerprint),
+                  rc.Answer(text="Unsupported legacy answer", model="old-model"),
+                  "Legacy answer", fingerprint)
+        legacy = cached_agent.ask("Legacy answer")
+        check("cache refuses legacy answers without grounded citations",
+              legacy.cached and legacy.text == rc.UNSUPPORTED_ANSWER
+              and not legacy.sources, legacy.text)
+        restored_legacy = rc.answer_from_dict({
+            "text": "Old chat answer without citations", "model": "old-model"})
+        check("restored chat answers preserve stored content",
+              restored_legacy.text == "Old chat answer without citations",
+              restored_legacy.text)
+        check("display-time grounding still refuses restored legacy text",
+              rc.enforce_answer_grounding(restored_legacy).text
+              == rc.UNSUPPORTED_ANSWER, restored_legacy.text)
+
+        # A model that skips search must not be allowed to answer from memory.
+        class NoSearchMessage:
+            type = "ai"
+            tool_calls: list[dict] = []
+
+            def __init__(self, text: str) -> None:
+                self.content = text
+
+        class NoSearchMemory:
+            def get(self) -> None:
+                return None
+
+            def set(self, model: str) -> None:
+                return None
+
+        class NoSearchGraph:
+            def stream(self, *args: object, **kwargs: object):
+                yield {"agent": {"messages": [
+                    NoSearchMessage("The capital of Morocco is Rabat.")
+                ]}}
+
+        unsupported_agent = rc.Agent(
+            engine,
+            rc.Settings(gemini_key="test-key"),
+            cache=rc.AnswerCache(Path(tmp) / "unsupported.json"),
+        )
+        unsupported_agent._graph = lambda model, search_method="hybrid": NoSearchGraph()  # type: ignore[assignment]
+        unsupported_agent.memory = NoSearchMemory()  # type: ignore[assignment]
+        unsupported = unsupported_agent.ask(
+            "What is the capital of Morocco?", use_cache=False)
+        check("agent refuses an unsupported answer without searching",
+              unsupported.text == rc.UNSUPPORTED_ANSWER
+              and not unsupported.sources
+              and any("no cited document" in step.label for step in unsupported.steps),
+              unsupported.text)
 
     print("\n== streaming contract ==")
     class FakeChunk:
@@ -466,7 +529,11 @@ def main() -> int:
             if args and isinstance(args[0], dict):
                 self.inputs.append(args[0])
             yield ("updates", {"agent": {"messages": []}})
-            yield ("messages", (FakeChunk("Hello "), {}))
+            yield ("updates", {"tools": {"messages": [
+                FakeChunk("[1] [Source: stream.md | Relevance: 0.90]\nEvidence",
+                          kind="tool")
+            ]}})
+            yield ("messages", (FakeChunk("Hello [1] "), {}))
             yield ("messages", (FakeChunk("world"), {}))
             yield ("messages", (FakeChunk("ignore preamble", tool=True), {}))
             yield ("messages", (FakeChunk("SOURCE TEXT", kind="tool"), {}))
@@ -486,7 +553,7 @@ def main() -> int:
             cache=rc.AnswerCache(Path(tmp) / "answers.json"),
         )
         graph = FakeGraph()
-        stream_agent._graph = lambda model: graph  # type: ignore[assignment]
+        stream_agent._graph = lambda model, search_method="hybrid": graph  # type: ignore[assignment]
         stream_agent.memory = FakeMemory()  # type: ignore[assignment]
         tokens: list[str] = []
         resets: list[bool] = []
@@ -494,10 +561,13 @@ def main() -> int:
             "stream please", use_cache=False,
             on_token=tokens.append, on_reset=lambda: resets.append(True),
         )
-        check("streamed tokens arrive in order", "".join(tokens) == "Hello world",
+        check("streamed tokens arrive in order", "".join(tokens) == "Hello [1] world",
               repr("".join(tokens)))
-        check("streamed answer is complete", streamed.text == "Hello world",
+        check("streamed answer is complete", streamed.text == "Hello [1] world",
               streamed.text)
+        check("streamed citation maps to a returned document",
+              streamed.sources[0].get("source") == "stream.md",
+              str(streamed.sources))
         check("streaming resets once before the model", len(resets) == 1,
               str(len(resets)))
         check("tool output is not part of the answer",
@@ -545,7 +615,7 @@ def main() -> int:
         fallback_agent.memory = FakeMemory()  # type: ignore[assignment]
         good_graph = FakeGraph()
 
-        def graph_for(model: str) -> object:
+        def graph_for(model: str, search_method: str = "hybrid") -> object:
             return TimeoutGraph() if model == "slow-model" else good_graph
 
         fallback_agent._graph = graph_for  # type: ignore[assignment]
@@ -560,7 +630,7 @@ def main() -> int:
         check("the timeout is noted in the trace",
               any("timed out" in note for note in notes), str(notes))
         check("the fallback answer is complete",
-              recovered.text == "Hello world", recovered.text)
+              recovered.text == "Hello [1] world", recovered.text)
 
     if want_llm:
         print("\n== agent (spends quota) ==")

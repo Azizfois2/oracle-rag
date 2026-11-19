@@ -40,7 +40,8 @@ class FakeAgent:
     def __init__(self) -> None:
         self.questions: list[str] = []
 
-    def ask_local(self, question, k=4, weight=0.6, context=None):
+    def ask_local(self, question, k=4, weight=0.6, context=None,
+                  search_method="hybrid"):
         self.questions.append(question)
         return rc.Answer(
             text="",

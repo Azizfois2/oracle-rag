@@ -57,8 +57,10 @@ class FakeAgent:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    def ask_local(self, question, k=4, weight=0.6, context=None):
-        self.calls.append({"question": question, "context": list(context or [])})
+    def ask_local(self, question, k=4, weight=0.6, context=None,
+                  search_method="hybrid"):
+        self.calls.append({"question": question, "context": list(context or []),
+                           "search_method": search_method})
         return rc.Answer(
             text="",
             model="local (no LLM)",
@@ -67,8 +69,9 @@ class FakeAgent:
         )
 
     def ask(self, question, on_step=None, recursion_limit=25, use_cache=True,
-            on_token=None, on_reset=None, context=None):
-        self.calls.append({"question": question, "context": list(context or [])})
+            on_token=None, on_reset=None, context=None, search_method="hybrid"):
+        self.calls.append({"question": question, "context": list(context or []),
+                           "search_method": search_method})
         if on_reset:
             on_reset()
         if on_token:
@@ -172,7 +175,20 @@ def session_checks() -> list[tuple[str, bool, str]]:
                    len(context) == 2
                    and context[0].get("role") == "user"
                    and context[1].get("role") == "assistant",
-                   str([item.get("role") for item in context])))
+                    str([item.get("role") for item in context])))
+
+    agent = FakeAgent()
+    console, buffer = console_buffer()
+    ask.ChatSession(
+        agent, None, local=True, console=console, tty=False,
+        reader=feed(["/search keyword", "/context off", "keyword question", "/quit"]),
+    ).run()
+    checks.append(("slash search method reaches local retrieval",
+                   bool(agent.calls) and agent.calls[0]["search_method"] == "keyword",
+                   str(agent.calls)))
+    checks.append(("slash context off suppresses follow-up context",
+                   bool(agent.calls) and agent.calls[0]["context"] == [],
+                   str(agent.calls)))
 
     agent = FakeAgent()
     console, buffer = console_buffer()
@@ -212,8 +228,9 @@ def session_checks() -> list[tuple[str, bool, str]]:
     ).run()
     body = buffer.getvalue()
     checks.append(("help lists the commands",
-                   all(name in body for name in ("/find", "/sources", "/title", "/delete")),
-                   body[-200:]))
+                    all(name in body for name in ("/find", "/sources", "/title",
+                                                  "/delete", "/search", "/context")),
+                    body[-200:]))
 
     console, buffer = console_buffer()
     ask.ChatSession(

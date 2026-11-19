@@ -58,13 +58,21 @@ DEFAULT_MODELS = [
 ]
 
 PROMPT = (
-    "You are a helpful AI research analyst. Use the search_tech_news tool "
-    "to find information and answer questions about technology companies, "
-    "AI products, partnerships, and industry trends. Every search result "
-    "starts with a number in brackets, like [1]. Cite the result you used "
-    "inline with that same number, for example [1] or [2]. Use only numbers "
-    "that the tool returned; never invent a source or a number. Always cite "
-    "your sources. Be concise and factual."
+    "You answer only from the documents in the search_tech_news tool. "
+    "Always search before answering, even when you know the answer from "
+    "general knowledge. If the returned passages do not contain enough "
+    "evidence to answer, say that the documents do not provide the answer. "
+    "Do not fill gaps from memory or general knowledge. Every search result "
+    "starts with a number in brackets, like [1]. Cite every factual answer "
+    "inline using the exact number of the passage that supports it. Use only "
+    "numbers that the tool returned; never invent a source or a number. "
+    "Be concise and factual."
+)
+
+UNSUPPORTED_ANSWER = (
+    "I couldn’t find information in the documents to answer that. "
+    "Try asking about a topic covered by the corpus, or add a relevant "
+    "document in the Corpus tab."
 )
 
 # The search tool numbers its results per question, so [1] means the same
@@ -547,6 +555,34 @@ def citation_numbers(items: Iterable[dict[str, Any]]) -> dict[int, dict[str, Any
         for number in numbers:
             mapping.setdefault(number, item)
     return mapping
+
+
+_INLINE_CITATION = re.compile(r"\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\]")
+
+
+def _has_valid_citations(text: str, sources: Iterable[dict[str, Any]]) -> bool:
+    """Require every inline citation to point to a returned document."""
+    lookup = citation_numbers(sources)
+    if not lookup:
+        return False
+    markers = _INLINE_CITATION.findall(text or "")
+    if not markers:
+        return False
+    numbers = [int(part.strip()) for marker in markers
+               for part in marker.split(",")]
+    return bool(numbers) and all(number in lookup for number in numbers)
+
+
+def enforce_answer_grounding(answer: Answer) -> Answer:
+    """Replace legacy or unsupported model text with the corpus-only refusal."""
+    if not answer.local and not _has_valid_citations(answer.text, answer.sources):
+        answer.text = UNSUPPORTED_ANSWER
+        answer.sources = []
+        if not any("no cited document" in step.label.lower()
+                   for step in answer.steps):
+            answer.steps.append(
+                Step("note", "no cited document supports this answer", ""))
+    return answer
 
 
 def extract_text(filename: str, data: bytes) -> str:
@@ -1216,7 +1252,8 @@ class ChatHistory:
                 try:
                     answer = answer_from_dict(json.loads(payload or "{}"))
                 except Exception:
-                    answer = Answer(text=content, model="unknown")
+                    answer = enforce_answer_grounding(
+                        Answer(text=content, model="unknown"))
                 out.append({"role": "assistant", "answer": answer, "at": at})
             else:
                 out.append({"role": speaker, "content": content, "at": at})
@@ -2102,15 +2139,45 @@ def _source_block(hit: Hit, number: int | None = None) -> str:
     return f"{header}]\n{hit.text}"
 
 
-def build_search_tool(engine: RagEngine) -> Any:
+SEARCH_METHODS = ("hybrid", "vector", "keyword", "rerank")
+
+
+def normalise_search_method(method: str | None) -> str:
+    value = str(method or "hybrid").strip().lower()
+    if value == "reranked":
+        value = "rerank"
+    if value not in SEARCH_METHODS:
+        raise RagError(
+            f"unknown search method {value!r}; choose "
+            f"{', '.join(SEARCH_METHODS)}")
+    return value
+
+
+def search_hits(engine: RagEngine, query: str, method: str = "hybrid",
+                k: int = 4, weight: float = 0.6) -> list[Hit]:
+    """Retrieve through one of the four Ask search paths."""
+    method = normalise_search_method(method)
+    if method == "vector":
+        return engine.vector_search(query, k=k)
+    if method == "keyword":
+        return engine.keyword_search(query, k=k)
+    if method == "rerank":
+        return engine.reranked_search(query, k=k, weight=weight)
+    return engine.hybrid_search(query, k=k, weight=weight)
+
+
+def build_search_tool(engine: RagEngine, method: str = "hybrid",
+                      weight: float = 0.6) -> Any:
     from langchain_core.tools import tool
+
+    method = normalise_search_method(method)
 
     @tool
     def search_tech_news(query: str) -> str:
         """Search the tech news knowledge base for information about AI companies,
         products, partnerships, and technology trends. Use this tool whenever
         you need to find specific facts or details about technology topics."""
-        hits = engine.vector_search(query, k=4)
+        hits = search_hits(engine, query, method=method, k=4, weight=weight)
         if not hits:
             return "No relevant documents found."
         start = _CITATION_SEQ.get()
@@ -2175,7 +2242,7 @@ class Agent:
         self.quota = quota or Quota(limit=self.s.daily_limit)
         self.cache = cache or AnswerCache()
         self.memory = ModelMemory()
-        self._graphs: dict[str, Any] = {}
+        self._graphs: dict[tuple[str, str], Any] = {}
 
     # -- models -------------------------------------------------------------
     def model_order(self) -> list[str]:
@@ -2203,26 +2270,30 @@ class Agent:
             timeout=60,
         )
 
-    def _graph(self, model: str) -> Any:
-        if model not in self._graphs:
+    def _graph(self, model: str, search_method: str = "hybrid") -> Any:
+        search_method = normalise_search_method(search_method)
+        key = (model, search_method)
+        if key not in self._graphs:
             from langgraph.prebuilt import create_react_agent
 
-            self._graphs[model] = create_react_agent(
+            self._graphs[key] = create_react_agent(
                 self._llm(model),
-                tools=[build_search_tool(self.engine)],
+                tools=[build_search_tool(self.engine, search_method)],
                 prompt=PROMPT,
             )
-        return self._graphs[model]
+        return self._graphs[key]
 
     # -- ask ----------------------------------------------------------------
     def ask(self, question: str, on_step: Callable[[str, str], None] | None = None,
             recursion_limit: int = 25, use_cache: bool = True,
             on_token: Callable[[str], None] | None = None,
             on_reset: Callable[[], None] | None = None,
-            context: Sequence[dict[str, Any]] | None = None) -> Answer:
+            context: Sequence[dict[str, Any]] | None = None,
+            search_method: str = "hybrid") -> Answer:
         question = (question or "").strip()
         if not question:
             raise RagError("ask something first")
+        search_method = normalise_search_method(search_method)
         turns = _context_messages(context)
 
         def emit(kind: str, text: str) -> None:
@@ -2284,11 +2355,15 @@ class Agent:
             corpus = self.engine.corpus_fingerprint()
             if corpus:
                 extra = {"context": turns} if turns else None
+                if search_method != "hybrid":
+                    extra = dict(extra or {})
+                    extra["search_method"] = search_method
                 cache_key = self.cache.key(question, corpus, extra=extra)
                 cached = self.cache.get(cache_key)
                 if cached is not None:
                     reset_stream()
                     emit("note", "cached answer, no model call")
+                    enforce_answer_grounding(cached)
                     emit_token(cached.text)
                     return cached
 
@@ -2315,8 +2390,10 @@ class Agent:
             started = time.perf_counter()
             try:
                 final: str | None = None
+                graph = (self._graph(model) if search_method == "hybrid"
+                         else self._graph(model, search_method))
                 if on_token is None:
-                    for update in self._graph(model).stream(
+                    for update in graph.stream(
                         {"messages": [*turns, ("user", question)]},
                         config={"callbacks": [counter], "recursion_limit": recursion_limit},
                         stream_mode="updates",
@@ -2326,7 +2403,7 @@ class Agent:
                             final = text
                 else:
                     tokens: list[str] = []
-                    for mode, payload in self._graph(model).stream(
+                    for mode, payload in graph.stream(
                         {"messages": [*turns, ("user", question)]},
                         config={"callbacks": [counter], "recursion_limit": recursion_limit},
                         stream_mode=["updates", "messages"],
@@ -2349,17 +2426,23 @@ class Agent:
                 if not final:
                     raise AgentError("the agent finished without producing an answer")
 
-                steps.append(Step("answer", "answer ready", ""))
-                emit("answer", "ready")
-                self.memory.set(model)
-                answer = Answer(
+                grounded_sources = _dedupe_sources(sources)
+                answer = enforce_answer_grounding(Answer(
                     text=final,
                     model=model,
                     steps=steps,
-                    sources=_dedupe_sources(sources),
+                    sources=grounded_sources,
                     calls=counter.calls,
                     elapsed=round(time.perf_counter() - started, 2),
-                )
+                ))
+                if answer.text != final and on_token is not None:
+                    if on_token is not None:
+                        reset_stream()
+                        emit_token(answer.text)
+
+                steps.append(Step("answer", "answer ready", ""))
+                emit("answer", "ready")
+                self.memory.set(model)
                 if cache_key is not None and corpus:
                     self.cache.put(cache_key, answer, question, corpus)
                 return answer
@@ -2398,24 +2481,26 @@ class Agent:
 
     # -- local mode ---------------------------------------------------------
     def ask_local(self, question: str, k: int = 4, weight: float = 0.6,
-                  context: Sequence[dict[str, Any]] | None = None) -> Answer:
+                  context: Sequence[dict[str, Any]] | None = None,
+                  search_method: str = "hybrid") -> Answer:
         question = (question or "").strip()
         if not question:
             raise RagError("ask something first")
+        search_method = normalise_search_method(search_method)
         turns = _context_messages(context)
         last_user = next((text for role, text in reversed(turns) if role == "user"), "")
         search_query = f"{last_user} {question}".strip() if last_user else question
         started = time.perf_counter()
-        bundle = self.engine.search_all(search_query, k=k, weight=weight)
+        started_search = time.perf_counter()
+        hits = search_hits(self.engine, search_query, method=search_method,
+                           k=k, weight=weight)
+        search_elapsed = (time.perf_counter() - started_search) * 1000
         steps: list[Step] = []
         if turns:
             steps.append(Step("note", f"{len(turns)} earlier messages in context", ""))
-        steps += [
-            Step("search", "keyword", f"{len(bundle.keyword)} hits · {bundle.timings['keyword']:.0f} ms"),
-            Step("search", "vector", f"{len(bundle.vector)} hits · {bundle.timings['vector']:.0f} ms"),
-            Step("search", "hybrid", f"{len(bundle.hybrid)} hits · {bundle.timings['hybrid']:.0f} ms"),
-        ]
-        sources = [{"source": h.source, "relevance": h.score} for h in bundle.hybrid]
+        steps.append(Step("search", search_method,
+                          f"{len(hits)} hits · {search_elapsed:.0f} ms"))
+        sources = [{"source": h.source, "relevance": h.score} for h in hits]
         return Answer(
             text="",
             model="local (no LLM)",
@@ -2424,7 +2509,7 @@ class Agent:
             calls=0,
             elapsed=round(time.perf_counter() - started, 2),
             local=True,
-            hits=bundle.hybrid,
+            hits=hits,
         )
 
 

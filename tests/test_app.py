@@ -72,6 +72,26 @@ def main() -> int:
           "the expand button is styled and its toolbar stays visible")
     check("sidebar offers a dark mode toggle",
           any(t.key == "dark_mode" for t in at.toggle))
+    method_picker = [item for item in at.selectbox
+                     if item.key == "sidebar_search_method_label"]
+    check("Ask offers a retrieval-method selector",
+          bool(method_picker), str([item.key for item in at.selectbox]))
+    if method_picker:
+        check("Ask retrieval defaults to Hybrid",
+              str(method_picker[0].value) == "Hybrid",
+              str(method_picker[0].value))
+    if at.chat_input:
+        at.chat_input[0].set_value("/search keyword").run()
+        check("GUI slash search changes the retrieval method",
+              at.session_state.get("search_method") == "keyword",
+              str(at.session_state.get("search_method")))
+        check("GUI slash command reports its result",
+              "retrieval set to" in markdown_text(at).lower())
+        at.chat_input[0].set_value("/context off").run()
+        check("GUI slash context toggle updates follow-up state",
+              at.session_state.get("follow_context") is False)
+        at.chat_input[0].set_value("/search hybrid").run()
+        at.chat_input[0].set_value("/context on").run()
     dark = [t for t in at.toggle if t.key == "dark_mode"]
     if dark:
         dark[0].set_value(True).run()
@@ -478,9 +498,10 @@ def main() -> int:
                 seen: dict = {"context": [], "tokens": []}
 
                 def fake_ask(self, question, on_step=None, recursion_limit=25,
-                             use_cache=True, on_token=None, on_reset=None,
-                             context=None):
+                              use_cache=True, on_token=None, on_reset=None,
+                              context=None, search_method="hybrid"):
                     seen["context"] = list(context or [])
+                    seen["search_method"] = search_method
                     if on_reset:
                         on_reset()
                     for piece in ("Streamed ", "answer [1]."):
@@ -506,6 +527,8 @@ def main() -> int:
                 try:
                     at.session_state["local_mode"] = False
                     at.session_state["follow_context"] = True
+                    at.session_state["search_method"] = "vector"
+                    at.session_state["sidebar_search_method_label"] = "Vector"
                     at.chat_input[0].set_value("And who funded them?").run()
                     check("streaming UI renders without exception",
                           not at.exception, str(at.exception))
@@ -529,6 +552,9 @@ def main() -> int:
                           repr("".join(seen["tokens"])))
                     check("follow-up context reached the agent",
                           len(seen["context"]) >= 2, str(len(seen["context"])))
+                    check("selected retrieval method reaches the agent",
+                          seen["search_method"] == "vector",
+                          str(seen.get("search_method")))
                     saved = history.messages(chat_id)
                     check("streamed answer is saved in Oracle",
                           any(m["role"] == "assistant"
@@ -543,7 +569,7 @@ def main() -> int:
 
                 def flaky_ask(self, question, on_step=None, recursion_limit=25,
                               use_cache=True, on_token=None, on_reset=None,
-                              context=None):
+                              context=None, search_method="hybrid"):
                     retry_calls.append({"question": str(question),
                                         "context": list(context or [])})
                     if fail_once["left"]:

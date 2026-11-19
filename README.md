@@ -82,10 +82,14 @@ and a discussion is saved after every turn. `/help` lists the commands:
 | Command | What it does |
 |---|---|
 | `/local` / `/remote` | switch between retrieval only and the Gemini agent |
+| `/search hybrid\|vector\|keyword\|rerank` | choose the Ask retrieval strategy |
+| `/mode local\|remote` | set the answer mode |
+| `/context on\|off` | toggle follow-up context |
 | `/new` | start a fresh discussion |
 | `/history` | list the ten most recent discussions |
 | `/open N` | reopen discussion N from that list |
 | `/find words` | search saved questions and answers |
+| `/clear` | clear the terminal display or GUI discussion search |
 | `/sources` | sources of the last answer |
 | `/trace` | trace of the last answer |
 | `/title [name]` | show or rename this discussion |
@@ -127,6 +131,11 @@ The TUI is an optional surface. It installs `textual` from `requirements.txt`
 and never runs a second copy of the retrieval logic. `--local` spends no quota;
 `--no-history` leaves no rows behind; `--theme light` starts in the light
 palette.
+
+The web Ask page has the same retrieval choices in the sidebar. Enter `/help`,
+`/search keyword`, `/mode local`, `/context off`, `/find words`, `/sources`, or
+`/trace` in the Ask input to run the corresponding command. The existing sidebar
+controls and discussion manager remain available as clickable alternatives.
 
 ---
 
