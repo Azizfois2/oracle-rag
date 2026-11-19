@@ -80,7 +80,21 @@ def main() -> int:
         check("Ask retrieval defaults to Hybrid",
               str(method_picker[0].value) == "Hybrid",
               str(method_picker[0].value))
+    check("Ask has a search-method selector by the chat input",
+          any(t.key == "ask_search_method_label" for t in at.selectbox),
+          str([t.key for t in at.selectbox]))
+    html_body = "\n".join(str(getattr(e, "value", "")) for e in at.html)
+    check("slash autocomplete is injected into Ask",
+          "slash-suggest-root" in html_body and "/search" in html_body
+          and "/sources" in html_body)
     if at.chat_input:
+        chat_before_help = list(at.session_state.get("chat") or [])
+        at.chat_input[0].set_value("/help").run()
+        check("GUI /help is handled as a command, not a question",
+              not at.exception
+              and (at.session_state.get("chat") or []) == chat_before_help
+              and "/search hybrid|vector|keyword|rerank" in markdown_text(at),
+              str(at.exception) if at.exception else markdown_text(at)[-400:])
         at.chat_input[0].set_value("/search keyword").run()
         check("GUI slash search changes the retrieval method",
               at.session_state.get("search_method") == "keyword",

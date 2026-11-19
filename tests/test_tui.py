@@ -125,6 +125,24 @@ async def exercise(root: Path) -> None:
               is not None)
         check("prompt is focused", app.focused is not None)
 
+        prompt = app.query_one("#prompt", tui.Input)
+        popup = app.query_one("#command-suggestions", tui.OptionList)
+        prompt.value = "/"
+        await pilot.pause()
+        check("slash popup shows all commands",
+              popup.has_class("visible") and len(app._suggest_matches) >= 15,
+              str(len(app._suggest_matches)))
+        prompt.value = "/s"
+        await pilot.pause()
+        check("slash popup filters as the user types",
+              popup.has_class("visible") and len(app._suggest_matches) >= 3
+              and all(name.startswith("/s") for name, _ in app._suggest_matches),
+              str(app._suggest_matches))
+        prompt.value = ""
+        await pilot.pause()
+        check("slash popup hides for a normal question",
+              not popup.has_class("visible"))
+
         await pilot.click("#theme")
         await pilot.pause()
         check("theme button switches to light", app.theme == "textual-light",

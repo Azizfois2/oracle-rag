@@ -39,8 +39,9 @@ try:
     from textual.app import App, ComposeResult
     from textual.binding import Binding
     from textual.containers import Horizontal, Vertical
-    from textual.widgets import (Button, Footer, Header, Input, RichLog, Static,
-                                 TabbedContent, TabPane)
+    from textual.suggester import SuggestFromList
+    from textual.widgets import (Button, Footer, Header, Input, OptionList, RichLog,
+                                 Static, TabbedContent, TabPane)
 except ImportError as exc:  # pragma: no cover - shown as a readable error
     print("error: the TUI needs textual and rich.")
     print("install them with:")
@@ -55,6 +56,52 @@ COMMANDS = (
     "/trace", "/save", "/artefacts", "/preview", "/title", "/delete",
     "/theme", "/quit",
 )
+
+# One source of truth for /help and for the live slash-command popup.
+COMMAND_HELP = (
+    ("/help", "this list"),
+    ("/local", "retrieval only, no model, zero quota"),
+    ("/remote", "use the Gemini agent again"),
+    ("/mode local|remote", "set the answer mode"),
+    ("/search hybrid|vector|keyword|rerank", "choose corpus retrieval"),
+    ("/context on|off", "toggle follow-up context"),
+    ("/new", "start a fresh discussion"),
+    ("/history", "the twelve most recent discussions"),
+    ("/open N", "reopen discussion N from that list"),
+    ("/find words", "search saved questions and answers"),
+    ("/clear", "clear the transcript display"),
+    ("/sources", "sources of the last answer"),
+    ("/trace", "trace of the last answer"),
+    ("/save", "save the last answer as Markdown, JSON and HTML"),
+    ("/artefacts", "list saved answer files"),
+    ("/preview N", "read artefact N in the transcript"),
+    ("/title [name]", "show or rename this discussion"),
+    ("/delete", "delete this discussion, twice to confirm"),
+    ("/theme", "switch dark and light"),
+    ("/quit", "leave the TUI"),
+)
+
+
+def filter_commands(token: str) -> list[tuple[str, str]]:
+    """Commands whose base name starts with the typed ``/...`` token."""
+    value = (token or "").strip().lower()
+    if not value.startswith("/"):
+        return []
+    head = value.split()[0] if value.split() else value
+    return [(name, description) for name, description in COMMAND_HELP
+            if name.split()[0].startswith(head)]
+
+
+class SlashSuggester(SuggestFromList):
+    """Inline ghost completion that only kicks in for slash commands."""
+
+    def __init__(self) -> None:
+        super().__init__([name for name, _ in COMMAND_HELP], case_sensitive=False)
+
+    async def get_suggestion(self, value: str) -> str | None:
+        if not value.startswith("/"):
+            return None
+        return await super().get_suggestion(value)
 
 
 def when(value: object) -> str:
@@ -97,7 +144,10 @@ class OracleTui(App[None]):
     #status { width: 1fr; content-align: left middle; opacity: 70%; }
     #toolbar Button { min-width: 9; margin-left: 1; }
     #transcript { height: 1fr; padding: 0 1; background: $surface; }
-    #prompt { margin: 1; border: tall $accent; }
+    #prompt { margin: 1 1 0 1; border: tall $accent; }
+    #command-suggestions { display: none; height: auto; max-height: 9;
+      margin: 0 1 1 1; border: round $accent; background: $panel; }
+    #command-suggestions.visible { display: block; }
     TabbedContent { height: 1fr; }
     TabPane { height: 1fr; padding: 0 1; }
     RichLog { height: 1fr; background: $surface; }
@@ -141,6 +191,7 @@ class OracleTui(App[None]):
         self._artefacts: list[arts.Artefact] = []
         self._confirm_delete = False
         self._busy = False
+        self._suggest_matches: list[tuple[str, str]] = []
 
     # -- layout --------------------------------------------------------------
     def compose(self) -> ComposeResult:
@@ -154,7 +205,9 @@ class OracleTui(App[None]):
                     yield Button("Save artefact", id="save")
                 yield RichLog(id="transcript", wrap=True, markup=False,
                               highlight=True, max_lines=4000)
-                yield Input(placeholder="Ask the corpus, or type /help", id="prompt")
+                yield Input(placeholder="Ask the corpus, or type /help", id="prompt",
+                            suggester=SlashSuggester())
+                yield OptionList(id="command-suggestions")
             with Vertical(id="right"):
                 with TabbedContent(id="panes"):
                     with TabPane("Sources", id="sources-tab"):
@@ -329,9 +382,44 @@ class OracleTui(App[None]):
                 log.write(Text("   " + " ".join(snippet.split())[:300], style="dim"))
 
     # -- input ---------------------------------------------------------------
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Show every slash command after '/', then narrow it as the user types."""
+        if event.input.id != "prompt":
+            return
+        popup = self.query_one("#command-suggestions", OptionList)
+        value = str(event.value or "")
+        matches = filter_commands(value)
+        if not matches:
+            popup.remove_class("visible")
+            self._suggest_matches = []
+            return
+        self._suggest_matches = matches
+        from textual.widgets.option_list import Option
+        popup.set_options([Option(f"{name:<30}  {description}")
+                           for name, description in matches])
+        popup.add_class("visible")
+
+    def on_option_list_option_selected(self,
+                                       event: OptionList.OptionSelected) -> None:
+        if event.option_list.id != "command-suggestions":
+            return
+        index = event.option_index
+        if index is None or index >= len(self._suggest_matches):
+            return
+        name = self._suggest_matches[index][0].split()[0]
+        prompt = self.query_one("#prompt", Input)
+        popup = self.query_one("#command-suggestions", OptionList)
+        prompt.value = name + " "
+        popup.remove_class("visible")
+        self._suggest_matches = []
+        prompt.focus()
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         line = str(event.value or "").strip()
         event.input.value = ""
+        popup = self.query_one("#command-suggestions", OptionList)
+        popup.remove_class("visible")
+        self._suggest_matches = []
         if not line:
             return
         if line.startswith("/"):
@@ -438,30 +526,8 @@ class OracleTui(App[None]):
             self._say(Text(f"Unknown command {name}. /help lists them.", style="yellow"))
 
     def _help(self) -> None:
-        rows = (
-            ("/help", "this list"),
-            ("/local", "retrieval only, no model, zero quota"),
-            ("/remote", "use the Gemini agent again"),
-            ("/mode local|remote", "set the answer mode"),
-            ("/search hybrid|vector|keyword|rerank", "choose corpus retrieval"),
-            ("/context on|off", "toggle follow-up context"),
-            ("/new", "start a fresh discussion"),
-            ("/history", "the twelve most recent discussions"),
-            ("/open N", "reopen discussion N from that list"),
-            ("/find words", "search saved questions and answers"),
-            ("/clear", "clear the transcript display"),
-            ("/sources", "sources of the last answer"),
-            ("/trace", "trace of the last answer"),
-            ("/save", "save the last answer as Markdown, JSON and HTML"),
-            ("/artefacts", "list saved answer files"),
-            ("/preview N", "read artefact N in the transcript"),
-            ("/title [name]", "show or rename this discussion"),
-            ("/delete", "delete this discussion, twice to confirm"),
-            ("/theme", "switch dark and light"),
-            ("/quit", "leave the TUI"),
-        )
         self._say(Text("Commands", style="bold"))
-        for name, description in rows:
+        for name, description in COMMAND_HELP:
             self._say(Text.assemble((f"  {name:<14}", "cyan"), (description, "")))
 
     def _search_method(self, arg: str) -> None:

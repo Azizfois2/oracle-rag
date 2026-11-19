@@ -127,15 +127,20 @@ answer, and `ctrl+l` returns to the prompt. `/help` lists every command,
 including `/local`, `/new`, `/history`, `/find`, `/open`, `/sources`, `/trace`,
 `/save`, `/artefacts`, `/preview` and `/delete`.
 
+Type `/` in the prompt to open the command popup, then keep typing to narrow it:
+`/s` shows `/search`, `/sources` and `/save`. Click a command, or press `Tab`, to
+complete it. The same live autocomplete is built into the web Ask input.
+
 The TUI is an optional surface. It installs `textual` from `requirements.txt`
 and never runs a second copy of the retrieval logic. `--local` spends no quota;
 `--no-history` leaves no rows behind; `--theme light` starts in the light
 palette.
 
-The web Ask page has the same retrieval choices in the sidebar. Enter `/help`,
-`/search keyword`, `/mode local`, `/context off`, `/find words`, `/sources`, or
-`/trace` in the Ask input to run the corresponding command. The existing sidebar
-controls and discussion manager remain available as clickable alternatives.
+The web Ask page has the retrieval choice both in the sidebar and right above
+the chat input. Enter `/help`, `/search keyword`, `/mode local`, `/context off`,
+`/find words`, `/sources`, or `/trace` in the Ask input to run the corresponding
+command. The existing sidebar controls and discussion manager remain available
+as clickable alternatives.
 
 ---
 

@@ -265,6 +265,19 @@ section[data-testid="stSidebar"] .block-container{ padding-top:1.6rem; }
 .stApp [data-testid="stBottom"]{ background:var(--paper); border-top:1px solid var(--line); }
 .stApp [data-testid="stChatInput"]>div{ border-radius:14px; box-shadow:0 8px 24px var(--shadow); }
 .stApp [data-testid="stChatInputSubmitButton"]{ border-radius:9px; }
+
+/* Slash-command autocomplete, anchored above the chat input. */
+.slash-suggest{ position:absolute; left:0; right:0; bottom:calc(100% + 6px); z-index:9999;
+  display:none; background:var(--surface); border:1px solid var(--line-strong);
+  border-radius:12px; padding:.35rem; max-height:17rem; overflow-y:auto;
+  box-shadow:0 18px 44px var(--shadow-lg); }
+.slash-suggest-item{ display:flex; align-items:baseline; gap:.65rem; width:100%;
+  border:0; background:transparent; color:var(--ink); text-align:left; cursor:pointer;
+  padding:.42rem .55rem; border-radius:8px; font-size:.82rem; }
+.slash-suggest-item:hover, .slash-suggest-item.active{ background:var(--accent-soft); }
+.slash-suggest-item code{ font-family:"IBM Plex Mono",ui-monospace,monospace;
+  color:var(--accent); font-weight:600; white-space:nowrap; }
+.slash-suggest-item span{ color:var(--ink3); font-size:.75rem; line-height:1.3; }
 .stApp [data-testid="stExpander"] details{ border:1px solid var(--line); border-radius:12px;
   background:var(--surface); overflow:hidden; box-shadow:0 3px 12px var(--shadow); }
 .stApp [data-testid="stExpander"] summary{ padding:.15rem .2rem; }
@@ -866,11 +879,9 @@ def render_sidebar(settings: rc.Settings, engine: rc.RagEngine, agent: rc.Agent,
         )
         method_labels = list(SEARCH_METHOD_LABELS)
         current_method = st.session_state.get("search_method", "hybrid")
-        method_index = next(
-            (index for index, method in enumerate(SEARCH_METHOD_LABELS.values())
-             if method == current_method), 0)
+        st.session_state["sidebar_search_method_label"] = _method_label(current_method)
         selected_method = st.selectbox(
-            "Ask search method", method_labels, index=method_index,
+            "Ask search method", method_labels,
             key="sidebar_search_method_label",
             help="Choose Hybrid, Vector, Keyword, or Reranked corpus retrieval.",
         )
@@ -1074,6 +1085,12 @@ SEARCH_METHOD_LABELS = {
     "Reranked": "rerank",
 }
 
+
+def _method_label(method: str) -> str:
+    """Turn a stored method into its sidebar label."""
+    return next((label for label, key in SEARCH_METHOD_LABELS.items()
+                 if key == method), "Hybrid")
+
 GUI_SLASH_COMMANDS = (
     ("/help", "Show Ask commands"),
     ("/new", "Start a new discussion"),
@@ -1092,6 +1109,121 @@ GUI_SLASH_COMMANDS = (
     ("/delete", "Open the discussion delete confirmation"),
     ("/clear", "Clear the discussion search"),
 )
+
+# Inline JS is injected once by render_slash_autocomplete(). The placeholder is
+# replaced with the JSON command list so Python stays the source of truth.
+_SLASH_JS = r"""
+(function() {
+  if (window.__ragSlashReady) return;
+  var commands = __COMMANDS__;
+  var box = null;
+  var observer = null;
+  var root = document.getElementById('slash-suggest-root');
+  if (!root) return;
+
+  function ensureBox(ta) {
+    if (box && box.isConnected && box.__ta === ta) return box;
+    box = document.createElement('div');
+    box.className = 'slash-suggest';
+    box.setAttribute('role', 'listbox');
+    box.__ta = ta;
+    var parent = ta.closest('[data-testid="stChatInput"]') || ta.parentElement || ta;
+    if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+    parent.appendChild(box);
+    return box;
+  }
+
+  function hide() { if (box) box.style.display = 'none'; }
+
+  function render(ta) {
+    var value = ta.value || '';
+    if (!value.trim().startsWith('/')) { hide(); return; }
+    var token = value.trim().split(/\s+/)[0].toLowerCase();
+    var matches = commands.filter(function(c) { return c[0].indexOf(token) === 0; });
+    if (!matches.length) { hide(); return; }
+    var b = ensureBox(ta);
+    b.innerHTML = '';
+    matches.forEach(function(entry, index) {
+      var row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'slash-suggest-item' + (index === 0 ? ' active' : '');
+      row.setAttribute('role', 'option');
+      var name = document.createElement('code');
+      name.textContent = entry[0];
+      var desc = document.createElement('span');
+      desc.textContent = entry[1];
+      row.appendChild(name);
+      row.appendChild(desc);
+      row.addEventListener('mousedown', function(event) {
+        event.preventDefault();
+        ta.value = entry[0] + ' ';
+        ta.focus();
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        hide();
+      });
+      b.appendChild(row);
+    });
+    b.style.display = 'block';
+  }
+
+  function attach(ta) {
+    if (!ta || ta.getAttribute('data-slash-attached') === '1') return;
+    ta.setAttribute('data-slash-attached', '1');
+    ta.addEventListener('input', function() { render(ta); });
+    ta.addEventListener('focus', function() { render(ta); });
+    ta.addEventListener('blur', function() { setTimeout(hide, 180); });
+    ta.addEventListener('keydown', function(event) {
+      if (!box || box.style.display === 'none') return;
+      if (event.key === 'Escape') { hide(); }
+      if (event.key === 'Tab') {
+        var first = box.querySelector('.slash-suggest-item');
+        if (first) { event.preventDefault(); first.dispatchEvent(new MouseEvent('mousedown')); }
+      }
+    });
+  }
+
+  function scan() {
+    var inputs = document.querySelectorAll('[data-testid="stChatInputTextArea"]');
+    for (var i = 0; i < inputs.length; i++) attach(inputs[i]);
+  }
+  scan();
+  window.__ragSlashReady = true;
+  observer = new MutationObserver(scan);
+  observer.observe(document.body, { childList: true, subtree: true });
+})();
+"""
+
+
+def slash_command_help() -> list[tuple[str, str]]:
+    """Base command name -> description, for autocomplete (arguments removed)."""
+    out: list[tuple[str, str]] = []
+    for command, description in GUI_SLASH_COMMANDS:
+        name = command.split()[0]
+        if name not in [entry[0] for entry in out]:
+            out.append((name, description))
+    return out
+
+
+def filter_slash_commands(token: str) -> list[tuple[str, str]]:
+    """Return the commands whose name starts with the text after ``/``."""
+    value = (token or "").strip().lower()
+    if not value.startswith("/"):
+        return []
+    head = value.split()[0] if value.split() else value
+    return [(name, description) for name, description in slash_command_help()
+            if name.startswith(head)]
+
+
+def render_slash_autocomplete() -> None:
+    """Attach a Codex-style command popup to the Streamlit chat textarea."""
+    commands = [[name, description] for name, description in slash_command_help()]
+    payload = json.dumps(commands).replace("</", "<\\/")
+    st.html(
+        '<div id="slash-suggest-root"></div><script>'
+        + _SLASH_JS.replace("__COMMANDS__", payload)
+        + "</script>",
+        unsafe_allow_javascript=True,
+    )
 
 
 def _last_saved_answer() -> rc.Answer | None:
@@ -1134,9 +1266,9 @@ def handle_gui_slash(line: str, settings: rc.Settings,
         except rc.RagError:
             return "Usage: `/search hybrid`, `/search vector`, `/search keyword`, or `/search rerank`."
         st.session_state.search_method = method
-        label = next(label for label, key in SEARCH_METHOD_LABELS.items()
-                     if key == method)
+        label = _method_label(method)
         st.session_state.sidebar_search_method_label = label
+        st.session_state.ask_search_method_label = label
         return f"Ask retrieval set to **{label}**."
     if name == "/context":
         value = arg.lower()
@@ -1559,9 +1691,26 @@ def tab_ask(settings: rc.Settings, agent: rc.Agent, history: rc.ChatHistory,
     if queued:
         answer_flow(queued, settings, agent, history)
 
+    # Retrieval choice lives next to the Ask box as well as in the sidebar.
+    method_col, hint_col = st.columns([1, 3], gap="small")
+    with method_col:
+        current_method = st.session_state.get("search_method", "hybrid")
+        st.session_state["ask_search_method_label"] = _method_label(current_method)
+        chosen_label = st.selectbox(
+            "Search method", list(SEARCH_METHOD_LABELS),
+            key="ask_search_method_label", label_visibility="collapsed",
+            help="Choose Hybrid, Vector, Keyword, or Reranked corpus retrieval.",
+        )
+        st.session_state.search_method = SEARCH_METHOD_LABELS[chosen_label]
+    with hint_col:
+        st.caption("Type `/` for commands, or ask about the corpus.")
+
+    render_slash_autocomplete()
     prompt = st.chat_input("Ask about the corpus")
     if prompt:
         if prompt.lstrip().startswith("/"):
+            # Widget-backed state cannot change after render. Queue the command
+            # and run it at the top of the next pass, before any widget exists.
             st.session_state.pending_slash = prompt.strip()
             st.rerun()
         else:
